@@ -1,0 +1,9 @@
+bin/
+obj/
+.vs/
+*.user
+*.db
+*.db-wal
+*.db-shm
+/.devzone-demo/
+**/devzone.local.json

@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <AssemblyName>DevTrack</AssemblyName>
+    <RootNamespace>Devzone.Desktop</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Devzone.Application\Devzone.Application.csproj" />
+    <ProjectReference Include="..\Devzone.Infrastructure\Devzone.Infrastructure.csproj" />
+  </ItemGroup>
+</Project>
