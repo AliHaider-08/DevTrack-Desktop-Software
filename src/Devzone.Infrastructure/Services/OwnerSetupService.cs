@@ -19,22 +19,21 @@ public sealed class OwnerSetupService(DevzoneDbContext dbContext, IPasswordHashe
         Permissions.BackupManage, Permissions.ReportsExport
     ];
 
-    public async Task CreateFirstOwnerAsync(OwnerSetupRequest request, CancellationToken cancellationToken = default)
+    public async Task CreateOwnerAsync(OwnerSetupRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
         var businessName = request.BusinessName.Trim();
+        var businessType = request.BusinessType.Trim();
         var ownerName = request.OwnerName.Trim();
         var username = request.Username.Trim();
         var currency = request.CurrencyCode.Trim().ToUpperInvariant();
-        if (businessName.Length is < 2 or > 200 || ownerName.Length is < 2 or > 160 || username.Length is < 3 or > 80)
+        if (businessName.Length is < 2 or > 200 || businessType.Length is < 2 or > 80 || ownerName.Length is < 2 or > 160 || username.Length is < 3 or > 80)
             throw new ArgumentException("Enter a valid business name, owner name, and username.", nameof(request));
         if (currency.Length != 3 || !currency.All(char.IsAsciiLetter))
             throw new ArgumentException("Currency must be a three-letter code.", nameof(request));
 
         var passwordHash = passwordHasher.Hash(request.Password);
         await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
-        if (await dbContext.Users.AnyAsync(cancellationToken))
-            throw new InvalidOperationException("Initial setup is already complete.");
         if (await dbContext.Users.AnyAsync(user => user.NormalizedUsername == UserAccountService.Normalize(username), cancellationToken))
             throw new InvalidOperationException("That username is already in use.");
 
@@ -45,6 +44,7 @@ public sealed class OwnerSetupService(DevzoneDbContext dbContext, IPasswordHashe
         {
             Id = companyId,
             BusinessName = businessName,
+            BusinessType = businessType,
             CurrencyCode = currency,
             CurrencyDecimalPlaces = 2,
             FinancialYearStart = request.FinancialYearStart,

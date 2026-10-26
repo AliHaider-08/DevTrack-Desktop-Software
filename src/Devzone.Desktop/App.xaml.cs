@@ -22,7 +22,7 @@ public partial class App : System.Windows.Application
             await using var scope = _serviceProvider.CreateAsyncScope();
             var dbContext = scope.ServiceProvider.GetRequiredService<DevzoneDbContext>();
             await SqliteDatabase.InitializeAsync(dbContext);
-            var setupRequired = !await dbContext.Users.AnyAsync();
+            var setupRequired = !await dbContext.Companies.AnyAsync();
             var accessWindow = new AccessWindow(_serviceProvider, setupRequired);
             MainWindow = accessWindow;
             var accessGranted = accessWindow.ShowDialog() == true;
@@ -38,7 +38,7 @@ public partial class App : System.Windows.Application
                 Guid.NewGuid(), accessWindow.User.Id, accessWindow.User.Username, DateTimeOffset.UtcNow,
                 "LoginSucceeded", "Security", accessWindow.User.Id.ToString("D"), null, null, Guid.NewGuid().ToString("N")));
             var company = await dbContext.Companies.AsNoTracking().SingleAsync(item => item.Id == accessWindow.User.CompanyId);
-            var mainWindow = new MainWindow(accessWindow.User, company.BusinessName, company.CurrencyCode, _serviceProvider);
+            var mainWindow = new MainWindow(accessWindow.User, company.BusinessName, company.BusinessType, company.CurrencyCode, _serviceProvider);
             MainWindow = mainWindow;
             mainWindow.Show();
             ShutdownMode = ShutdownMode.OnMainWindowClose;

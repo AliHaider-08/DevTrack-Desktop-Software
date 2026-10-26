@@ -5,11 +5,26 @@
     <Color x:Key="PrimaryTextColor">#292B25</Color>
     <Color x:Key="SecondaryTextColor">#64665B</Color>
     <Color x:Key="BorderColor">#D0D2C1</Color>
+    <Color x:Key="AccentColor">#287E8A</Color>
+    <Color x:Key="AccentHoverColor">#216B75</Color>
+    <Color x:Key="DangerColor">#B54747</Color>
+    <Color x:Key="HeroColor">#102E3A</Color>
+    <Color x:Key="HeroDeepColor">#173F4B</Color>
+    <Color x:Key="AccentSoftColor">#E5F2EF</Color>
     <SolidColorBrush x:Key="PrimaryBackgroundBrush" Color="{StaticResource PrimaryBackgroundColor}" />
     <SolidColorBrush x:Key="SecondaryBackgroundBrush" Color="{StaticResource SecondaryBackgroundColor}" />
     <SolidColorBrush x:Key="PrimaryTextBrush" Color="{StaticResource PrimaryTextColor}" />
     <SolidColorBrush x:Key="SecondaryTextBrush" Color="{StaticResource SecondaryTextColor}" />
     <SolidColorBrush x:Key="BorderBrush" Color="{StaticResource BorderColor}" />
+    <SolidColorBrush x:Key="AccentBrush" Color="{StaticResource AccentColor}" />
+    <SolidColorBrush x:Key="AccentHoverBrush" Color="{StaticResource AccentHoverColor}" />
+    <SolidColorBrush x:Key="DangerBrush" Color="{StaticResource DangerColor}" />
+    <SolidColorBrush x:Key="AccentSoftBrush" Color="{StaticResource AccentSoftColor}" />
+    <SolidColorBrush x:Key="HeroOrbBrush" Color="#FF69C9BC" />
+    <LinearGradientBrush x:Key="HeroBrush" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="{StaticResource HeroColor}" Offset="0" />
+        <GradientStop Color="{StaticResource HeroDeepColor}" Offset="1" />
+    </LinearGradientBrush>
     <SolidColorBrush x:Key="SurfaceBrush" Color="#FFFAF3" />
     <Style TargetType="Window">
         <Setter Property="Background" Value="{StaticResource PrimaryBackgroundBrush}" />

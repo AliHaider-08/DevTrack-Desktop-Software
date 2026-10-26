@@ -16,14 +16,17 @@ public partial class MainWindow : Window
     private static readonly string[] NavigationItems = ["Dashboard", "Products", "Categories", "Stock Movements", "Purchases", "Customers"];
     private readonly AuthenticatedUser _user;
     private readonly IServiceProvider _services;
+    private readonly string _businessType;
     private readonly string _currencyCode;
     private Button? _selectedNavigation;
+    private readonly Dictionary<string, Button> _navigationButtons = new(StringComparer.OrdinalIgnoreCase);
 
-    public MainWindow(AuthenticatedUser user, string companyName, string currencyCode, IServiceProvider services)
+    public MainWindow(AuthenticatedUser user, string companyName, string businessType, string currencyCode, IServiceProvider services)
     {
         InitializeComponent();
         _user = user;
         _services = services;
+        _businessType = businessType;
         _currencyCode = currencyCode;
         CompanyLabel.Text = companyName;
         UserLabel.Text = $"{user.Username} · Owner";
@@ -33,9 +36,20 @@ public partial class MainWindow : Window
             var button = new Button { Content = item, Style = (Style)FindResource("NavButton") };
             button.Click += (_, _) => Navigate(item, button);
             NavigationPanel.Children.Add(button);
+            _navigationButtons[item] = button;
         }
 
-        Loaded += async (_, _) => await ShowDashboardAsync();
+        Loaded += async (_, _) =>
+        {
+            try
+            {
+                await ShowDashboardAsync();
+            }
+            catch (Exception exception)
+            {
+                ShowDashboardLoadError(exception);
+            }
+        };
     }
 
     private async void Navigate(string page, Button selected)
@@ -77,25 +91,205 @@ public partial class MainWindow : Window
 
     private async Task ShowDashboardAsync()
     {
+        MainContent.Children.Clear();
+        MainContent.Children.Add(new TextBlock
+        {
+            Text = "Loading dashboard…",
+            Foreground = (Brush)FindResource("SecondaryTextBrush"),
+            Margin = new Thickness(0, 4, 0, 12)
+        });
+        var workflow = GetBusinessWorkflow(_businessType);
+        PageDescription.Text = $"{_businessType} workspace · {workflow.Description}";
         using var scope = _services.CreateScope();
         var catalog = scope.ServiceProvider.GetRequiredService<IProductCatalogService>();
         var summary = await catalog.GetDashboardSummaryAsync(_user.CompanyId);
+        var products = await catalog.SearchProductsAsync(_user.CompanyId);
+        var categories = await catalog.GetCategoriesAsync(_user.CompanyId);
+        var purchases = await scope.ServiceProvider.GetRequiredService<IPurchasingService>()
+            .GetPurchasesAsync(_user.CompanyId);
+        var customers = await scope.ServiceProvider.GetRequiredService<ICustomerService>()
+            .SearchAsync(_user.CompanyId);
         MainContent.Children.Clear();
         var cards = new UniformGrid { Columns = 2, Rows = 2, Margin = new Thickness(0, 0, 0, 18) };
-        cards.Children.Add(CreateMetricCard("Active products", summary.ProductCount.ToString("N0"), "In this company"));
-        cards.Children.Add(CreateMetricCard("Low stock", summary.LowStockCount.ToString("N0"), "At or below minimum level"));
-        cards.Children.Add(CreateMetricCard("Out of stock", summary.OutOfStockCount.ToString("N0"), "Needs replenishment"));
-        cards.Children.Add(CreateMetricCard("Inventory cost value", $"{_currencyCode} {summary.InventoryCostValue:N2}", "Based on current quantity × cost"));
+        foreach (var metric in GetBusinessMetrics(_businessType, summary, products, categories, purchases, customers))
+            cards.Children.Add(CreateMetricCard(metric.Title, metric.Value, metric.Detail));
         MainContent.Children.Add(cards);
+        var quickLinks = new WrapPanel { Margin = new Thickness(0, 0, 0, 16) };
+        foreach (var page in workflow.Pages)
+        {
+            var quickLink = CreateActionButton(page);
+            quickLink.Margin = new Thickness(0, 0, 8, 8);
+            quickLink.Click += (_, _) =>
+            {
+                if (_navigationButtons.TryGetValue(page, out var target))
+                    Navigate(page, target);
+            };
+            quickLinks.Children.Add(quickLink);
+        }
+        MainContent.Children.Add(quickLinks);
         var note = new Border { Style = (Style)FindResource("CardBorder"), Background = (Brush)FindResource("SecondaryBackgroundBrush") };
         note.Child = new TextBlock
         {
-            Text = "Dashboard figures use saved products and stock movements. Supplier stock receipts are available under Purchases; sales and cash reports are not implemented yet.",
+            Text = workflow.Guidance,
             TextWrapping = TextWrapping.Wrap,
             Foreground = (Brush)FindResource("SecondaryTextBrush")
         };
         MainContent.Children.Add(note);
     }
+
+    private void ShowDashboardLoadError(Exception exception)
+    {
+        MainContent.Children.Clear();
+        MainContent.Children.Add(new Border
+        {
+            Style = (Style)FindResource("CardBorder"),
+            BorderBrush = Brushes.IndianRed,
+            Child = new StackPanel
+            {
+                Children =
+                {
+                    new TextBlock { Text = "Dashboard data could not be loaded", FontSize = 17, FontWeight = FontWeights.SemiBold },
+                    new TextBlock { Text = exception.GetBaseException().Message, TextWrapping = TextWrapping.Wrap,
+                        Foreground = Brushes.Firebrick, Margin = new Thickness(0, 8, 0, 0) },
+                    CreateActionButton("Retry dashboard")
+                }
+            }
+        });
+        if (MainContent.Children[0] is Border border && border.Child is StackPanel panel && panel.Children[2] is Button retry)
+        {
+            retry.Margin = new Thickness(0, 14, 0, 0);
+            retry.HorizontalAlignment = HorizontalAlignment.Left;
+            retry.Click += async (_, _) =>
+            {
+                try { await ShowDashboardAsync(); }
+                catch (Exception retryException) { ShowDashboardLoadError(retryException); }
+            };
+        }
+    }
+
+    private (string Title, string Value, string Detail)[] GetBusinessMetrics(
+        string businessType,
+        DashboardSummary summary,
+        IReadOnlyList<ProductItem> products,
+        IReadOnlyList<CategoryItem> categories,
+        IReadOnlyList<PurchaseItem> purchases,
+        IReadOnlyList<CustomerItem> customers)
+    {
+        var monthStart = new DateTimeOffset(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1, 0, 0, 0, TimeSpan.Zero);
+        var monthPurchases = purchases.Where(purchase => purchase.ReceivedAt >= monthStart).ToArray();
+        var supplierCount = purchases.Select(purchase => purchase.SupplierName)
+            .Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        var inventoryValue = $"{_currencyCode} {summary.InventoryCostValue:N2}";
+        var recentPurchaseCount = monthPurchases.Length.ToString("N0");
+
+        return businessType switch
+        {
+            "Grocery or convenience store" =>
+            [
+                ("Tracked items", summary.ProductCount.ToString("N0"), "Products in the catalog"),
+                ("Reorder soon", summary.LowStockCount.ToString("N0"), "Items at or below minimum stock"),
+                ("Out of stock", summary.OutOfStockCount.ToString("N0"), "Items needing replenishment"),
+                ("Suppliers", supplierCount.ToString("N0"), "Suppliers in purchase history")
+            ],
+            "Clothing and fashion" =>
+            [
+                ("Product styles", summary.ProductCount.ToString("N0"), "Active products tracked"),
+                ("Product groups", categories.Count.ToString("N0"), "Catalog categories"),
+                ("Low stock", summary.LowStockCount.ToString("N0"), "Styles at or below minimum"),
+                ("Stock cost value", inventoryValue, "Based on quantity × cost")
+            ],
+            "Electronics" =>
+            [
+                ("Products tracked", summary.ProductCount.ToString("N0"), "Active products and accessories"),
+                ("Categories", categories.Count.ToString("N0"), "Catalog categories"),
+                ("Low stock", summary.LowStockCount.ToString("N0"), "Products at or below minimum"),
+                ("Receipts this month", recentPurchaseCount, "Supplier stock purchases")
+            ],
+            "Restaurant or café" =>
+            [
+                ("Tracked supplies", summary.ProductCount.ToString("N0"), "Products and ingredients"),
+                ("Reorder soon", summary.LowStockCount.ToString("N0"), "Items at or below minimum stock"),
+                ("Receipts this month", recentPurchaseCount, "Incoming supply purchases"),
+                ("Stock cost value", inventoryValue, "Based on quantity × cost")
+            ],
+            "Wholesale and distribution" =>
+            [
+                ("Products available", summary.ProductCount.ToString("N0"), "Active catalog products"),
+                ("Suppliers", supplierCount.ToString("N0"), "Suppliers in purchase history"),
+                ("Purchases this month", recentPurchaseCount, "Received purchase records"),
+                ("Low stock", summary.LowStockCount.ToString("N0"), "Products at or below minimum")
+            ],
+            "Pharmacy" =>
+            [
+                ("Products tracked", summary.ProductCount.ToString("N0"), "Active catalog products"),
+                ("Out of stock", summary.OutOfStockCount.ToString("N0"), "Products needing replenishment"),
+                ("Low stock", summary.LowStockCount.ToString("N0"), "Products at or below minimum"),
+                ("Stock cost value", inventoryValue, "Based on quantity × cost")
+            ],
+            "Beauty or salon" =>
+            [
+                ("Customers", customers.Count.ToString("N0"), "Active customer records"),
+                ("Retail and supplies", summary.ProductCount.ToString("N0"), "Active products tracked"),
+                ("Low stock", summary.LowStockCount.ToString("N0"), "Products at or below minimum"),
+                ("Purchases this month", recentPurchaseCount, "Received supplier purchases")
+            ],
+            "Home services" =>
+            [
+                ("Customers", customers.Count.ToString("N0"), "Active customer records"),
+                ("Tracked materials", summary.ProductCount.ToString("N0"), "Products and service supplies"),
+                ("Low stock", summary.LowStockCount.ToString("N0"), "Materials at or below minimum"),
+                ("Categories", categories.Count.ToString("N0"), "Product groups")
+            ],
+            "Retail shop" =>
+            [
+                ("Active products", summary.ProductCount.ToString("N0"), "Products in the catalog"),
+                ("Categories", categories.Count.ToString("N0"), "Catalog groups"),
+                ("Low stock", summary.LowStockCount.ToString("N0"), "Products at or below minimum"),
+                ("Stock cost value", inventoryValue, "Based on quantity × cost")
+            ],
+            _ =>
+            [
+                ("Active products", summary.ProductCount.ToString("N0"), "Products in the catalog"),
+                ("Low stock", summary.LowStockCount.ToString("N0"), "At or below minimum level"),
+                ("Out of stock", summary.OutOfStockCount.ToString("N0"), "Needs replenishment"),
+                ("Inventory cost value", inventoryValue, "Based on current quantity × cost")
+            ]
+        };
+    }
+
+    private static (string Description, string Guidance, string[] Pages) GetBusinessWorkflow(string businessType) => businessType switch
+    {
+        "Grocery or convenience store" => ("Monitor item availability and incoming stock.",
+            "Track grocery items in Products, replenish from Purchases, and use Stock Movements to record spoilage or corrections.",
+            ["Products", "Purchases", "Stock Movements"]),
+        "Clothing and fashion" => ("Keep product lines and stock levels organized.",
+            "Use product names, SKUs, and categories to organize apparel. Purchases and stock movements update the same inventory records.",
+            ["Products", "Categories", "Stock Movements"]),
+        "Electronics" => ("Track products, categories, and stock receipts.",
+            "Maintain electronics and accessories in Products, organize them with Categories, and record supplier receipts in Purchases.",
+            ["Products", "Categories", "Purchases"]),
+        "Restaurant or café" => ("Keep ingredients and supplies visible.",
+            "Use Products for ingredients and supplies, Purchases for incoming stock, and Stock Movements for usage or corrections. Point-of-sale and recipe costing are not available yet.",
+            ["Products", "Purchases", "Stock Movements"]),
+        "Wholesale and distribution" => ("Review stock availability and supplier receipts.",
+            "Organize bulk products and categories, receive supplier stock through Purchases, and review quantity changes in Stock Movements.",
+            ["Products", "Purchases", "Stock Movements"]),
+        "Pharmacy" => ("Keep product availability and stock records current.",
+            "Use Products, Categories, Purchases, and Stock Movements for inventory control. Prescription and dispensing workflows are not available yet.",
+            ["Products", "Categories", "Purchases"]),
+        "Beauty or salon" => ("Manage retail items, supplies, and customer records.",
+            "Track products and supplies, record stock receipts, and manage customer balances. Appointment booking is not available yet.",
+            ["Products", "Customers", "Purchases"]),
+        "Home services" => ("Keep customers and commonly used supplies organized.",
+            "Manage customer records and track service materials as products. Scheduling and job management are not available yet.",
+            ["Customers", "Products", "Stock Movements"]),
+        "Retail shop" => ("Monitor products, stock levels, and replenishment.",
+            "Use Products and Categories to maintain your catalog, Purchases to receive stock, and Stock Movements to review adjustments.",
+            ["Products", "Categories", "Purchases"]),
+        _ => ("Manage products, inventory, purchasing, and customers.",
+            "Choose Products, Purchases, Stock Movements, or Customers to manage the workflows currently available in DevTrack.",
+            ["Products", "Purchases", "Customers"])
+    };
 
     private async Task ShowProductsAsync(string? search = null)
     {

@@ -36,7 +36,20 @@ public static class SqliteDatabase
 
     public static DbContextOptions<DevzoneDbContext> CreateOptions(string? databasePath = null)
     {
+        var connectionString = CreateConnectionString(databasePath);
+        return new DbContextOptionsBuilder<DevzoneDbContext>()
+            .UseSqlite(connectionString)
+            .Options;
+    }
+
+    public static string CreateConnectionString(string? databasePath = null)
+    {
         var path = databasePath ?? GetDefaultDatabasePath();
+        if (!Path.IsPathFullyQualified(path))
+        {
+            throw new ArgumentException("The database path must be absolute.", nameof(databasePath));
+        }
+
         var directory = Path.GetDirectoryName(path);
         if (string.IsNullOrWhiteSpace(directory))
         {
@@ -44,14 +57,13 @@ public static class SqliteDatabase
         }
 
         Directory.CreateDirectory(directory);
-        return new DbContextOptionsBuilder<DevzoneDbContext>()
-            .UseSqlite($"Data Source={path};Foreign Keys=True;Pooling=True")
-            .Options;
+        return $"Data Source={path};Foreign Keys=True;Pooling=True";
     }
 
     public static async Task InitializeAsync(DevzoneDbContext dbContext, CancellationToken cancellationToken = default)
     {
         await dbContext.Database.EnsureCreatedAsync(cancellationToken);
+        await EnsureBusinessTypeColumnAsync(dbContext, cancellationToken);
         await dbContext.Database.ExecuteSqlRawAsync(
             "CREATE TABLE IF NOT EXISTS Categories (Id TEXT NOT NULL PRIMARY KEY, CompanyId TEXT NOT NULL, Name TEXT NOT NULL, NormalizedName TEXT NOT NULL, Description TEXT NULL, CreatedAt TEXT NOT NULL, FOREIGN KEY (CompanyId) REFERENCES Companies (Id) ON DELETE RESTRICT);",
             cancellationToken);
@@ -109,5 +121,28 @@ public static class SqliteDatabase
         await dbContext.Database.ExecuteSqlRawAsync(
             "CREATE TRIGGER IF NOT EXISTS TR_CustomerLedger_NoDelete BEFORE DELETE ON CustomerLedgerEntries BEGIN SELECT RAISE(ABORT, 'Customer ledger entries are append-only'); END;",
             cancellationToken);
+    }
+
+    private static async Task EnsureBusinessTypeColumnAsync(DevzoneDbContext dbContext, CancellationToken cancellationToken)
+    {
+        var connection = dbContext.Database.GetDbConnection();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA table_info('Companies');";
+        if (connection.State != System.Data.ConnectionState.Open)
+            await connection.OpenAsync(cancellationToken);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var hasBusinessType = false;
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            if (string.Equals(reader.GetString(1), "BusinessType", StringComparison.OrdinalIgnoreCase))
+            {
+                hasBusinessType = true;
+                break;
+            }
+        }
+        await reader.DisposeAsync();
+        if (!hasBusinessType)
+            await dbContext.Database.ExecuteSqlRawAsync(
+                "ALTER TABLE Companies ADD COLUMN BusinessType TEXT NOT NULL DEFAULT 'Other';", cancellationToken);
     }
 }

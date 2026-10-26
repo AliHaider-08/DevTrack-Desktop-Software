@@ -19,7 +19,7 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddDevzoneLocalServices(this IServiceCollection services, string? databasePath = null)
     {
         services.AddDbContext<DevzoneDbContext>(options => options.UseSqlite(
-            $"Data Source={databasePath ?? SqliteDatabase.GetDefaultDatabasePath()};Foreign Keys=True;Pooling=True"));
+            SqliteDatabase.CreateConnectionString(databasePath)));
         services.AddSingleton<IPasswordHasher, Pbkdf2PasswordHasher>();
         services.AddScoped<ICompanyProfileService, CompanyProfileService>();
         services.AddScoped<IUserAccountService, UserAccountService>();

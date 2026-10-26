@@ -2,6 +2,7 @@ namespace Devzone.Application.Security;
 
 public sealed record OwnerSetupRequest(
     string BusinessName,
+    string BusinessType,
     string CurrencyCode,
     string OwnerName,
     string Username,
@@ -10,5 +11,5 @@ public sealed record OwnerSetupRequest(
 
 public interface IOwnerSetupService
 {
-    Task CreateFirstOwnerAsync(OwnerSetupRequest request, CancellationToken cancellationToken = default);
+    Task CreateOwnerAsync(OwnerSetupRequest request, CancellationToken cancellationToken = default);
 }

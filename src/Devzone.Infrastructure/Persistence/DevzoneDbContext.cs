@@ -21,6 +21,7 @@ public sealed class DevzoneDbContext(DbContextOptions<DevzoneDbContext> options)
         {
             entity.HasKey(company => company.Id);
             entity.Property(company => company.BusinessName).HasMaxLength(200).IsRequired();
+            entity.Property(company => company.BusinessType).HasMaxLength(80).IsRequired();
             entity.Property(company => company.CurrencyCode).HasMaxLength(3).IsRequired();
             entity.Property(company => company.InvoiceNumberPrefix).HasMaxLength(20).IsRequired();
             entity.ToTable(table =>

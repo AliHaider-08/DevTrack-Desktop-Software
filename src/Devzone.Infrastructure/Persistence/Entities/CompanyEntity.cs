@@ -4,6 +4,7 @@ public sealed class CompanyEntity
 {
     public Guid Id { get; set; }
     public string BusinessName { get; set; } = string.Empty;
+    public string BusinessType { get; set; } = "Other";
     public string? Address { get; set; }
     public string? Phone { get; set; }
     public string? Email { get; set; }
