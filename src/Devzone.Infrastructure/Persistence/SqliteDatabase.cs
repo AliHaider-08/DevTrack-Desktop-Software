@@ -31,7 +31,7 @@ public static class SqliteDatabase
         var appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         if (string.IsNullOrWhiteSpace(appData))
             throw new InvalidOperationException("Windows did not provide a LocalAppData folder.");
-        return Path.Combine(appData, "Devzone System", "BusinessManagement", "devzone.db");
+        return Path.Combine(appData, "DevTrack", "Data", "devtrack.db");
     }
 
     public static DbContextOptions<DevzoneDbContext> CreateOptions(string? databasePath = null)
@@ -79,6 +79,7 @@ public static class SqliteDatabase
         await dbContext.Database.ExecuteSqlRawAsync(
             "CREATE UNIQUE INDEX IF NOT EXISTS IX_Products_CompanyId_Barcode ON Products (CompanyId, Barcode);",
             cancellationToken);
+        await EnsureProductPharmacyColumnsAsync(dbContext, cancellationToken);
         await dbContext.Database.ExecuteSqlRawAsync(
             "CREATE TABLE IF NOT EXISTS StockMovements (Id TEXT NOT NULL PRIMARY KEY, CompanyId TEXT NOT NULL, ProductId TEXT NOT NULL, QuantityChange TEXT NOT NULL, BalanceAfter TEXT NOT NULL, UnitCost TEXT NOT NULL, Reason TEXT NOT NULL, Username TEXT NOT NULL, OccurredAt TEXT NOT NULL, FOREIGN KEY (CompanyId) REFERENCES Companies (Id) ON DELETE RESTRICT, FOREIGN KEY (ProductId) REFERENCES Products (Id) ON DELETE RESTRICT);",
             cancellationToken);
@@ -121,6 +122,39 @@ public static class SqliteDatabase
         await dbContext.Database.ExecuteSqlRawAsync(
             "CREATE TRIGGER IF NOT EXISTS TR_CustomerLedger_NoDelete BEFORE DELETE ON CustomerLedgerEntries BEGIN SELECT RAISE(ABORT, 'Customer ledger entries are append-only'); END;",
             cancellationToken);
+    }
+
+    private static async Task EnsureProductPharmacyColumnsAsync(DevzoneDbContext dbContext, CancellationToken cancellationToken)
+    {
+        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        await using (var command = dbContext.Database.GetDbConnection().CreateCommand())
+        {
+            command.CommandText = "PRAGMA table_info(Products);";
+            if (command.Connection!.State != System.Data.ConnectionState.Open)
+                await command.Connection.OpenAsync(cancellationToken);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+                columns.Add(reader.GetString(1));
+        }
+
+        foreach (var name in new[]
+        {
+            "BatchNumber", "ExpiryDate", "Strength", "DosageForm"
+        })
+        {
+            if (!columns.Contains(name))
+            {
+                var definition = name switch
+                {
+                    "BatchNumber" => "BatchNumber TEXT NULL",
+                    "ExpiryDate" => "ExpiryDate TEXT NULL",
+                    "Strength" => "Strength TEXT NULL",
+                    "DosageForm" => "DosageForm TEXT NULL",
+                    _ => throw new InvalidOperationException("Unsupported pharmacy column migration.")
+                };
+                await dbContext.Database.ExecuteSqlRawAsync("ALTER TABLE Products ADD COLUMN " + definition + ";", cancellationToken);
+            }
+        }
     }
 
     private static async Task EnsureBusinessTypeColumnAsync(DevzoneDbContext dbContext, CancellationToken cancellationToken)

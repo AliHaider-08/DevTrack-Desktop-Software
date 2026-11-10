@@ -6,4 +6,5 @@ obj/
 *.db-wal
 *.db-shm
 /.devzone-demo/
+/artifacts/
 **/devzone.local.json

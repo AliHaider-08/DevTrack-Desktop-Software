@@ -30,7 +30,8 @@ public sealed class ProductCatalogService(DevzoneDbContext dbContext) : IProduct
         return products.Select(product => new ProductItem(
             product.Id, product.Sku, product.Barcode, product.Name, product.Category?.Name,
             product.CostPrice, product.SellingPrice, product.MinimumStock,
-            balances.GetValueOrDefault(product.Id), product.IsActive)).ToArray();
+            balances.GetValueOrDefault(product.Id), product.IsActive, product.BatchNumber,
+            product.ExpiryDate, product.Strength, product.DosageForm)).ToArray();
     }
 
     public async Task<IReadOnlyList<CategoryItem>> GetCategoriesAsync(Guid companyId, CancellationToken cancellationToken = default) =>
@@ -100,6 +101,10 @@ public sealed class ProductCatalogService(DevzoneDbContext dbContext) : IProduct
         product.CostPrice = decimal.Round(draft.CostPrice, 4, MidpointRounding.AwayFromZero);
         product.SellingPrice = decimal.Round(draft.SellingPrice, 4, MidpointRounding.AwayFromZero);
         product.MinimumStock = decimal.Round(draft.MinimumStock, 3, MidpointRounding.AwayFromZero);
+        product.BatchNumber = Clean(draft.BatchNumber);
+        product.ExpiryDate = draft.ExpiryDate;
+        product.Strength = Clean(draft.Strength);
+        product.DosageForm = Clean(draft.DosageForm);
         product.UpdatedAt = now;
         dbContext.AuditEvents.Add(CreateAudit(username, action, "Products", product.Id, action));
         await dbContext.SaveChangesAsync(cancellationToken);
@@ -148,11 +153,12 @@ public sealed class ProductCatalogService(DevzoneDbContext dbContext) : IProduct
     public async Task<IReadOnlyList<StockMovementItem>> GetStockMovementsAsync(Guid companyId, int limit = 200, CancellationToken cancellationToken = default)
     {
         var movements = await dbContext.StockMovements.AsNoTracking().Where(movement => movement.CompanyId == companyId)
-            .OrderByDescending(movement => movement.OccurredAt).Take(Math.Clamp(limit, 1, 1000))
             .Select(movement => new StockMovementItem(movement.OccurredAt, movement.Product.Sku, movement.Product.Name,
                 movement.QuantityChange, movement.BalanceAfter, movement.Reason, movement.Username))
             .ToListAsync(cancellationToken);
-        return movements;
+        return movements.OrderByDescending(movement => movement.OccurredAt)
+            .Take(Math.Clamp(limit, 1, 1000))
+            .ToArray();
     }
 
     public async Task<DashboardSummary> GetDashboardSummaryAsync(Guid companyId, CancellationToken cancellationToken = default)

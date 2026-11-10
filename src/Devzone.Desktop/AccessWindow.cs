@@ -35,6 +35,7 @@ public sealed class AccessWindow : Window
     private TextBox _username = null!;
     private PasswordBox _password = null!;
     private PasswordBox _confirmation = null!;
+    private TextBlock? _businessTypeHint;
 
     public AuthenticatedUser? User { get; private set; }
 
@@ -252,9 +253,40 @@ public sealed class AccessWindow : Window
             }
         };
         selector.SelectedItem = _businessType?.SelectedItem ?? "Retail shop";
+        _businessTypeHint = new TextBlock
+        {
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 5, 0, 5),
+            FontSize = 11,
+            Foreground = BrushFrom("SecondaryTextBrush")
+        };
+        selector.SelectionChanged += (_, _) => UpdateBusinessTypeHint(selector);
+        UpdateBusinessTypeHint(selector);
         _form.Children.Add(selector);
+        _form.Children.Add(_businessTypeHint);
         return selector;
     }
+
+    private void UpdateBusinessTypeHint(ComboBox selector)
+    {
+        if (_businessTypeHint is null) return;
+        var profile = GetBusinessProfile(selector.SelectedItem?.ToString() ?? "Other");
+        _businessTypeHint.Text = $"Workspace setup: {profile.Summary} Example catalog: {profile.ProductExample}. Enabled sections: {string.Join(", ", profile.Pages)}.";
+    }
+
+    private static (string Summary, string ProductExample, string[] Pages) GetBusinessProfile(string businessType) => businessType switch
+    {
+        "Grocery or convenience store" => ("barcode-ready catalog, quick stock adjustments, and supplier receiving.", "packaged goods and perishables", ["Dashboard", "Products", "Categories", "Stock Movements", "Purchases"]),
+        "Clothing and fashion" => ("style and category focused catalog with size/color guidance.", "apparel styles and accessories", ["Dashboard", "Products", "Categories", "Stock Movements"]),
+        "Electronics" => ("SKU and barcode focused catalog with warranty notes.", "devices and accessories", ["Dashboard", "Products", "Categories", "Purchases", "Stock Movements"]),
+        "Restaurant or café" => ("ingredient and supply tracking with stock usage adjustments.", "ingredients and packaging", ["Dashboard", "Products", "Categories", "Purchases", "Stock Movements"]),
+        "Wholesale and distribution" => ("supplier purchasing and bulk stock tracking.", "cases and bulk goods", ["Dashboard", "Products", "Categories", "Purchases", "Stock Movements", "Customers"]),
+        "Pharmacy" => ("medicine fields for brand, strength, dosage form, batch, and expiry tracking.", "medicines and health products", ["Dashboard", "Products", "Categories", "Purchases", "Stock Movements", "Customers"]),
+        "Beauty or salon" => ("customer and retail product tracking for salon supplies.", "beauty products and consumables", ["Dashboard", "Products", "Categories", "Customers", "Purchases"]),
+        "Home services" => ("customer records and material tracking for service jobs.", "parts and job materials", ["Dashboard", "Customers", "Products", "Stock Movements"]),
+        "Retail shop" => ("product catalog, barcode support, and reorder alerts.", "retail products", ["Dashboard", "Products", "Categories", "Purchases", "Stock Movements"]),
+        _ => ("flexible product, customer, and purchasing workflows.", "your products and supplies", ["Dashboard", "Products", "Categories", "Purchases", "Stock Movements", "Customers"])
+    };
 
     private static Brush BrushFrom(string key) => (Brush)System.Windows.Application.Current.FindResource(key);
 

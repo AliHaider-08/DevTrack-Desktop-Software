@@ -6,6 +6,9 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <AssemblyName>DevTrack</AssemblyName>
     <RootNamespace>Devzone.Desktop</RootNamespace>
+    <Version>1.0.0</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Devzone.Application\Devzone.Application.csproj" />

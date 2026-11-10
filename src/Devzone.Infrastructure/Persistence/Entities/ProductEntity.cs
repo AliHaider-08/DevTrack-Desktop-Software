@@ -14,6 +14,10 @@ public sealed class ProductEntity
     public decimal CostPrice { get; set; }
     public decimal SellingPrice { get; set; }
     public decimal MinimumStock { get; set; }
+    public string? BatchNumber { get; set; }
+    public DateOnly? ExpiryDate { get; set; }
+    public string? Strength { get; set; }
+    public string? DosageForm { get; set; }
     public bool IsActive { get; set; } = true;
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }

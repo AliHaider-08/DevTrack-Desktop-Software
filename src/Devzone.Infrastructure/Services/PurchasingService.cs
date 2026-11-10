@@ -8,15 +8,19 @@ namespace Devzone.Infrastructure.Services;
 public sealed class PurchasingService(DevzoneDbContext dbContext) : IPurchasingService
 {
     public async Task<IReadOnlyList<PurchaseItem>> GetPurchasesAsync(
-        Guid companyId, int limit = 200, CancellationToken cancellationToken = default) =>
-        await dbContext.Purchases.AsNoTracking()
+        Guid companyId, int limit = 200, CancellationToken cancellationToken = default)
+    {
+        var purchases = await dbContext.Purchases.AsNoTracking()
             .Where(purchase => purchase.CompanyId == companyId)
-            .OrderByDescending(purchase => purchase.ReceivedAt)
-            .Take(Math.Clamp(limit, 1, 1000))
             .Select(purchase => new PurchaseItem(purchase.ReceivedAt, purchase.Reference, purchase.SupplierName,
                 purchase.Product.Sku, purchase.Product.Name, purchase.Quantity, purchase.UnitCost,
                 purchase.TotalCost, purchase.Username))
             .ToListAsync(cancellationToken);
+
+        return purchases.OrderByDescending(purchase => purchase.ReceivedAt)
+            .Take(Math.Clamp(limit, 1, 1000))
+            .ToArray();
+    }
 
     public async Task ReceiveAsync(Guid companyId, PurchaseDraft purchase, string username,
         CancellationToken cancellationToken = default)

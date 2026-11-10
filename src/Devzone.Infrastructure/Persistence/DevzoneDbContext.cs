@@ -78,6 +78,9 @@ public sealed class DevzoneDbContext(DbContextOptions<DevzoneDbContext> options)
             entity.Property(product => product.CostPrice).HasPrecision(18, 4);
             entity.Property(product => product.SellingPrice).HasPrecision(18, 4);
             entity.Property(product => product.MinimumStock).HasPrecision(18, 3);
+            entity.Property(product => product.BatchNumber).HasMaxLength(80);
+            entity.Property(product => product.Strength).HasMaxLength(80);
+            entity.Property(product => product.DosageForm).HasMaxLength(80);
             entity.HasIndex(product => new { product.CompanyId, product.NormalizedSku }).IsUnique();
             entity.HasIndex(product => new { product.CompanyId, product.Barcode }).IsUnique();
             entity.HasOne<CompanyEntity>().WithMany().HasForeignKey(product => product.CompanyId).OnDelete(DeleteBehavior.Restrict);

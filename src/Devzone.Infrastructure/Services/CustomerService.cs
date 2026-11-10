@@ -88,10 +88,9 @@ public sealed class CustomerService(DevzoneDbContext dbContext) : ICustomerServi
     {
         var entries = await dbContext.CustomerLedgerEntries.AsNoTracking()
             .Where(entry => entry.CompanyId == companyId && entry.CustomerId == customerId)
-            .OrderBy(entry => entry.OccurredAt).ThenBy(entry => entry.Id)
             .Select(entry => new CustomerLedgerItem(entry.OccurredAt, entry.Type, entry.BalanceChange,
                 entry.BalanceAfter, entry.Description, entry.Username)).ToListAsync(cancellationToken);
-        return entries;
+        return entries.OrderBy(entry => entry.OccurredAt).ToArray();
     }
 
     private async Task RecordBalanceEntryAsync(Guid companyId, Guid customerId, decimal amount, string description,

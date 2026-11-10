@@ -18,6 +18,7 @@ public partial class MainWindow : Window
     private readonly IServiceProvider _services;
     private readonly string _businessType;
     private readonly string _currencyCode;
+    private string[] _activeNavigationItems = NavigationItems;
     private Button? _selectedNavigation;
     private readonly Dictionary<string, Button> _navigationButtons = new(StringComparer.OrdinalIgnoreCase);
 
@@ -31,7 +32,8 @@ public partial class MainWindow : Window
         CompanyLabel.Text = companyName;
         UserLabel.Text = $"{user.Username} · Owner";
 
-        foreach (var item in NavigationItems)
+        _activeNavigationItems = GetBusinessProfile(_businessType).Pages;
+        foreach (var item in _activeNavigationItems)
         {
             var button = new Button { Content = item, Style = (Style)FindResource("NavButton") };
             button.Click += (_, _) => Navigate(item, button);
@@ -109,11 +111,49 @@ public partial class MainWindow : Window
             .GetPurchasesAsync(_user.CompanyId);
         var customers = await scope.ServiceProvider.GetRequiredService<ICustomerService>()
             .SearchAsync(_user.CompanyId);
+        var expiringProducts = _businessType == "Pharmacy"
+            ? products.Where(product => product.ExpiryDate.HasValue && product.ExpiryDate.Value <= DateOnly.FromDateTime(DateTime.Today.AddDays(90)))
+                .OrderBy(product => product.ExpiryDate).Take(8).ToArray()
+            : [];
+        var recentMovements = await catalog.GetStockMovementsAsync(_user.CompanyId, 8);
         MainContent.Children.Clear();
-        var cards = new UniformGrid { Columns = 2, Rows = 2, Margin = new Thickness(0, 0, 0, 18) };
+        var toolbar = new DockPanel { LastChildFill = true, Margin = new Thickness(0, 0, 0, 16) };
+        var refresh = CreateActionButton("Refresh data");
+        refresh.Click += async (_, _) =>
+        {
+            try
+            {
+                await ShowDashboardAsync();
+                StatusMessage.Text = $"Dashboard refreshed at {DateTime.Now:t}.";
+            }
+            catch (Exception exception) { ShowError(exception.Message); }
+        };
+        DockPanel.SetDock(refresh, Dock.Right);
+        toolbar.Children.Add(refresh);
+        toolbar.Children.Add(new TextBlock
+        {
+            Text = $"Live workspace · Updated {DateTime.Now:t}",
+            Foreground = (Brush)FindResource("SecondaryTextBrush"),
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        MainContent.Children.Add(toolbar);
+
+        var cards = new UniformGrid { Columns = 4, Rows = 1, Margin = new Thickness(0, 0, 0, 18) };
         foreach (var metric in GetBusinessMetrics(_businessType, summary, products, categories, purchases, customers))
             cards.Children.Add(CreateMetricCard(metric.Title, metric.Value, metric.Detail));
         MainContent.Children.Add(cards);
+
+        var activityGrid = new Grid { Margin = new Thickness(0, 0, 0, 18) };
+        activityGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        activityGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        activityGrid.Children.Add(CreateAttentionPanel(products));
+        var recentPanel = CreateRecentMovementsPanel(recentMovements);
+        Grid.SetColumn(recentPanel, 1);
+        activityGrid.Children.Add(recentPanel);
+        MainContent.Children.Add(activityGrid);
+        if (_businessType == "Pharmacy")
+            MainContent.Children.Add(CreateExpiryPanel(expiringProducts));
+
         var quickLinks = new WrapPanel { Margin = new Thickness(0, 0, 0, 16) };
         foreach (var page in workflow.Pages)
         {
@@ -135,6 +175,111 @@ public partial class MainWindow : Window
             Foreground = (Brush)FindResource("SecondaryTextBrush")
         };
         MainContent.Children.Add(note);
+    }
+
+    private Border CreateAttentionPanel(IReadOnlyList<ProductItem> products)
+    {
+        var lowStock = products.Where(product => product.OnHand <= product.MinimumStock)
+            .OrderBy(product => product.OnHand)
+            .ThenBy(product => product.Name)
+            .Take(6)
+            .ToArray();
+        var panel = new StackPanel();
+        panel.Children.Add(new TextBlock { Text = "Needs attention", FontSize = 17, FontWeight = FontWeights.SemiBold });
+        panel.Children.Add(new TextBlock
+        {
+            Text = lowStock.Length == 0 ? "All active products are above their minimum stock." : "Products at or below their minimum stock level.",
+            Foreground = (Brush)FindResource("SecondaryTextBrush"),
+            Margin = new Thickness(0, 4, 0, 12),
+            TextWrapping = TextWrapping.Wrap
+        });
+        if (lowStock.Length == 0)
+        {
+            panel.Children.Add(new TextBlock { Text = "✓ Inventory looks healthy", Foreground = (Brush)FindResource("AccentBrush") });
+        }
+        else
+        {
+            foreach (var product in lowStock)
+            {
+                var row = new DockPanel { Margin = new Thickness(0, 0, 0, 10) };
+                var quantity = new TextBlock
+                {
+                    Text = $"{product.OnHand:N0} / {product.MinimumStock:N0}",
+                    Foreground = product.OnHand <= 0 ? Brushes.Firebrick : (Brush)FindResource("SecondaryTextBrush"),
+                    HorizontalAlignment = HorizontalAlignment.Right
+                };
+                DockPanel.SetDock(quantity, Dock.Right);
+                row.Children.Add(quantity);
+                row.Children.Add(new TextBlock { Text = product.Name, TextTrimming = TextTrimming.CharacterEllipsis });
+                panel.Children.Add(row);
+            }
+        }
+
+        var card = new Border { Style = (Style)FindResource("CardBorder"), Margin = new Thickness(0, 0, 8, 0) };
+        card.Child = panel;
+        return card;
+    }
+
+    private Border CreateRecentMovementsPanel(IReadOnlyList<StockMovementItem> movements)
+    {
+        var panel = new StackPanel();
+        panel.Children.Add(new TextBlock { Text = "Recent activity", FontSize = 17, FontWeight = FontWeights.SemiBold });
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Latest stock changes recorded in this workspace.",
+            Foreground = (Brush)FindResource("SecondaryTextBrush"),
+            Margin = new Thickness(0, 4, 0, 12)
+        });
+        if (movements.Count == 0)
+        {
+            panel.Children.Add(new TextBlock { Text = "No stock movements recorded yet.", Foreground = (Brush)FindResource("SecondaryTextBrush") });
+        }
+        else
+        {
+            foreach (var movement in movements.Take(6))
+            {
+                var row = new DockPanel { Margin = new Thickness(0, 0, 0, 10) };
+                var change = new TextBlock
+                {
+                    Text = movement.QuantityChange > 0 ? $"+{movement.QuantityChange:N0}" : movement.QuantityChange.ToString("N0"),
+                    Foreground = movement.QuantityChange < 0 ? Brushes.Firebrick : (Brush)FindResource("AccentBrush"),
+                    HorizontalAlignment = HorizontalAlignment.Right
+                };
+                DockPanel.SetDock(change, Dock.Right);
+                row.Children.Add(change);
+                row.Children.Add(new TextBlock
+                {
+                    Text = $"{movement.ProductName} · {movement.OccurredAt.LocalDateTime:g}",
+                    TextTrimming = TextTrimming.CharacterEllipsis
+                });
+                panel.Children.Add(row);
+            }
+        }
+
+        var card = new Border { Style = (Style)FindResource("CardBorder"), Margin = new Thickness(8, 0, 0, 0) };
+        card.Child = panel;
+        return card;
+    }
+
+    private Border CreateExpiryPanel(IReadOnlyList<ProductItem> expiringProducts)
+    {
+        var panel = new StackPanel();
+        panel.Children.Add(new TextBlock { Text = "Medicine expiry watch", FontSize = 17, FontWeight = FontWeights.SemiBold });
+        panel.Children.Add(new TextBlock
+        {
+            Text = expiringProducts.Count == 0 ? "No medicines expire within 90 days." : $"{expiringProducts.Count} medicine items expire within 90 days or are already expired.",
+            Foreground = (Brush)FindResource("SecondaryTextBrush"), Margin = new Thickness(0, 4, 0, 12), TextWrapping = TextWrapping.Wrap
+        });
+        foreach (var product in expiringProducts)
+            panel.Children.Add(new TextBlock
+            {
+                Text = $"{product.Name}{(string.IsNullOrWhiteSpace(product.BatchNumber) ? string.Empty : $" · Batch {product.BatchNumber}")} · Expires {product.ExpiryDate:dd MMM yyyy}",
+                Foreground = product.ExpiryDate <= DateOnly.FromDateTime(DateTime.Today) ? Brushes.Firebrick : (Brush)FindResource("SecondaryTextBrush"),
+                Margin = new Thickness(0, 0, 0, 7), TextTrimming = TextTrimming.CharacterEllipsis
+            });
+        var card = new Border { Style = (Style)FindResource("CardBorder"), Margin = new Thickness(0, 0, 0, 18) };
+        card.Child = panel;
+        return card;
     }
 
     private void ShowDashboardLoadError(Exception exception)
@@ -181,6 +326,9 @@ public partial class MainWindow : Window
             .Distinct(StringComparer.OrdinalIgnoreCase).Count();
         var inventoryValue = $"{_currencyCode} {summary.InventoryCostValue:N2}";
         var recentPurchaseCount = monthPurchases.Length.ToString("N0");
+        var pharmacyProducts = products.Where(product => product.ExpiryDate.HasValue).ToArray();
+        var expiringSoonCount = pharmacyProducts.Count(product => product.ExpiryDate <= DateOnly.FromDateTime(DateTime.Today.AddDays(90))).ToString("N0");
+        var expiredCount = pharmacyProducts.Count(product => product.ExpiryDate < DateOnly.FromDateTime(DateTime.Today)).ToString("N0");
 
         return businessType switch
         {
@@ -221,10 +369,10 @@ public partial class MainWindow : Window
             ],
             "Pharmacy" =>
             [
-                ("Products tracked", summary.ProductCount.ToString("N0"), "Active catalog products"),
-                ("Out of stock", summary.OutOfStockCount.ToString("N0"), "Products needing replenishment"),
-                ("Low stock", summary.LowStockCount.ToString("N0"), "Products at or below minimum"),
-                ("Stock cost value", inventoryValue, "Based on quantity × cost")
+                ("Medicines tracked", summary.ProductCount.ToString("N0"), "Active medicine catalog"),
+                ("Expiring in 90 days", expiringSoonCount, "Medicine batches to review"),
+                ("Expired batches", expiredCount, "Remove from sale and review"),
+                ("Low stock", summary.LowStockCount.ToString("N0"), "Products at or below minimum")
             ],
             "Beauty or salon" =>
             [
@@ -257,6 +405,20 @@ public partial class MainWindow : Window
         };
     }
 
+    private static (string Summary, string ProductExample, string[] Pages) GetBusinessProfile(string businessType) => businessType switch
+    {
+        "Grocery or convenience store" => ("barcode-ready catalog, quick stock adjustments, and supplier receiving.", "packaged goods and perishables", ["Dashboard", "Products", "Categories", "Stock Movements", "Purchases"]),
+        "Clothing and fashion" => ("style and category focused catalog with size/color guidance.", "apparel styles and accessories", ["Dashboard", "Products", "Categories", "Stock Movements"]),
+        "Electronics" => ("SKU and barcode focused catalog with warranty notes.", "devices and accessories", ["Dashboard", "Products", "Categories", "Purchases", "Stock Movements"]),
+        "Restaurant or café" => ("ingredient and supply tracking with stock usage adjustments.", "ingredients and packaging", ["Dashboard", "Products", "Categories", "Purchases", "Stock Movements"]),
+        "Wholesale and distribution" => ("supplier purchasing and bulk stock tracking.", "cases and bulk goods", ["Dashboard", "Products", "Categories", "Purchases", "Stock Movements", "Customers"]),
+        "Pharmacy" => ("medicine fields for brand, strength, dosage form, batch, and expiry tracking.", "medicines and health products", ["Dashboard", "Products", "Categories", "Purchases", "Stock Movements", "Customers"]),
+        "Beauty or salon" => ("customer and retail product tracking for salon supplies.", "beauty products and consumables", ["Dashboard", "Products", "Categories", "Customers", "Purchases"]),
+        "Home services" => ("customer records and material tracking for service jobs.", "parts and job materials", ["Dashboard", "Customers", "Products", "Stock Movements"]),
+        "Retail shop" => ("product catalog, barcode support, and reorder alerts.", "retail products", ["Dashboard", "Products", "Categories", "Purchases", "Stock Movements"]),
+        _ => ("flexible product, customer, and purchasing workflows.", "your products and supplies", NavigationItems)
+    };
+
     private static (string Description, string Guidance, string[] Pages) GetBusinessWorkflow(string businessType) => businessType switch
     {
         "Grocery or convenience store" => ("Monitor item availability and incoming stock.",
@@ -274,9 +436,9 @@ public partial class MainWindow : Window
         "Wholesale and distribution" => ("Review stock availability and supplier receipts.",
             "Organize bulk products and categories, receive supplier stock through Purchases, and review quantity changes in Stock Movements.",
             ["Products", "Purchases", "Stock Movements"]),
-        "Pharmacy" => ("Keep product availability and stock records current.",
-            "Use Products, Categories, Purchases, and Stock Movements for inventory control. Prescription and dispensing workflows are not available yet.",
-            ["Products", "Categories", "Purchases"]),
+        "Pharmacy" => ("Track medicine stock, batches, and expiry dates.",
+            "Record brand, strength, dosage form, batch and expiry with each medicine. Review the expiry watch on your dashboard and receive supplier stock through Purchases. Prescription handling is not included in this inventory workspace.",
+            ["Products", "Categories", "Purchases", "Stock Movements", "Customers"]),
         "Beauty or salon" => ("Manage retail items, supplies, and customer records.",
             "Track products and supplies, record stock receipts, and manage customer balances. Appointment booking is not available yet.",
             ["Products", "Customers", "Purchases"]),
@@ -298,13 +460,14 @@ public partial class MainWindow : Window
         var categories = await catalog.GetCategoriesAsync(_user.CompanyId);
         var products = await catalog.SearchProductsAsync(_user.CompanyId, search);
         MainContent.Children.Clear();
+        var pharmacyMode = _businessType == "Pharmacy";
 
         var toolbar = new DockPanel { LastChildFill = true, Margin = new Thickness(0, 0, 0, 14) };
         var actions = new StackPanel { Orientation = Orientation.Horizontal };
         var addButton = CreateActionButton("Add product");
         addButton.Click += async (_, _) =>
         {
-            var dialog = new ProductEditorWindow(categories, _currencyCode) { Owner = this };
+            var dialog = new ProductEditorWindow(categories, _currencyCode, businessType: _businessType) { Owner = this };
             if (dialog.ShowDialog() == true)
             {
                 await SaveProductAsync(dialog.Draft!);
@@ -335,13 +498,20 @@ public partial class MainWindow : Window
         grid.Columns.Add(TextColumn("Cost", nameof(ProductItem.CostPrice), 100));
         grid.Columns.Add(TextColumn("Selling price", nameof(ProductItem.SellingPrice), 120));
         grid.Columns.Add(TextColumn("Minimum", nameof(ProductItem.MinimumStock), 90));
+        if (pharmacyMode)
+        {
+            grid.Columns.Add(TextColumn("Batch", nameof(ProductItem.BatchNumber), 100));
+        grid.Columns.Add(new DataGridTextColumn { Header = "Expiry", Binding = new System.Windows.Data.Binding(nameof(ProductItem.ExpiryDate)) { StringFormat = "dd MMM yyyy" }, Width = 105 });
+            grid.Columns.Add(TextColumn("Strength", nameof(ProductItem.Strength), 100));
+            grid.Columns.Add(TextColumn("Form", nameof(ProductItem.DosageForm), 100));
+        }
         grid.ItemsSource = products;
         MainContent.Children.Add(grid);
 
         editButton.Click += async (_, _) =>
         {
             if (grid.SelectedItem is not ProductItem product) { ShowError("Select a product first."); return; }
-            var dialog = new ProductEditorWindow(categories, _currencyCode, product) { Owner = this };
+            var dialog = new ProductEditorWindow(categories, _currencyCode, product, _businessType) { Owner = this };
             if (dialog.ShowDialog() == true)
             {
                 await SaveProductAsync(dialog.Draft!);
@@ -835,17 +1005,21 @@ internal sealed class ProductEditorWindow : Window
     private readonly TextBox _cost = new();
     private readonly TextBox _price = new();
     private readonly TextBox _minimum = new();
+    private readonly TextBox _batchNumber = new();
+    private readonly TextBox _expiryDate = new();
+    private readonly TextBox _strength = new();
+    private readonly TextBox _dosageForm = new();
     private readonly ComboBox _category = new();
     private readonly TextBlock _error = new();
     private readonly Guid? _id;
 
     public ProductDraft? Draft { get; private set; }
 
-    public ProductEditorWindow(IReadOnlyList<CategoryItem> categories, string currencyCode, ProductItem? product = null)
+    public ProductEditorWindow(IReadOnlyList<CategoryItem> categories, string currencyCode, ProductItem? product = null, string businessType = "Other")
     {
         _id = product?.Id;
         Title = product is null ? "Add product" : "Edit product";
-        Width = 470;
+        Width = businessType == "Pharmacy" ? 500 : 470;
         SizeToContent = SizeToContent.Height;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         ResizeMode = ResizeMode.NoResize;
@@ -860,6 +1034,14 @@ internal sealed class ProductEditorWindow : Window
         AddField(fields, $"Cost ({currencyCode})", _cost);
         AddField(fields, $"Selling price ({currencyCode})", _price);
         AddField(fields, "Minimum stock", _minimum);
+        if (businessType == "Pharmacy")
+        {
+            fields.Children.Add(new TextBlock { Text = "Medicine details", FontSize = 14, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 14, 0, 2) });
+            AddField(fields, "Batch number", _batchNumber);
+            AddField(fields, "Expiry date (yyyy-MM-dd)", _expiryDate);
+            AddField(fields, "Strength (e.g. 500 mg)", _strength);
+            AddField(fields, "Dosage form (e.g. tablet)", _dosageForm);
+        }
         if (product is null)
         {
             _cost.Text = "0";
@@ -881,6 +1063,10 @@ internal sealed class ProductEditorWindow : Window
             _cost.Text = product.CostPrice.ToString(CultureInfo.CurrentCulture);
             _price.Text = product.SellingPrice.ToString(CultureInfo.CurrentCulture);
             _minimum.Text = product.MinimumStock.ToString(CultureInfo.CurrentCulture);
+            _batchNumber.Text = product.BatchNumber ?? string.Empty;
+            _expiryDate.Text = product.ExpiryDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? string.Empty;
+            _strength.Text = product.Strength ?? string.Empty;
+            _dosageForm.Text = product.DosageForm ?? string.Empty;
             _category.SelectedItem = categories.FirstOrDefault(category => category.Name == product.CategoryName);
         }
     }
@@ -894,8 +1080,19 @@ internal sealed class ProductEditorWindow : Window
             _error.Text = "Enter valid numbers for cost, selling price, and minimum stock.";
             return;
         }
+        DateOnly? expiryDate = null;
+        if (!string.IsNullOrWhiteSpace(_expiryDate.Text))
+        {
+            if (!DateOnly.TryParseExact(_expiryDate.Text.Trim(), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsedExpiry))
+            {
+                _error.Text = "Enter the expiry date using yyyy-MM-dd, or leave it blank.";
+                return;
+            }
+            expiryDate = parsedExpiry;
+        }
         Draft = new ProductDraft(_id, _sku.Text, _barcode.Text, _name.Text,
-            _category.SelectedValue is Guid categoryId ? categoryId : null, cost, price, minimum);
+            _category.SelectedValue is Guid categoryId ? categoryId : null, cost, price, minimum,
+            _batchNumber.Text, expiryDate, _strength.Text, _dosageForm.Text);
         DialogResult = true;
     }
 
