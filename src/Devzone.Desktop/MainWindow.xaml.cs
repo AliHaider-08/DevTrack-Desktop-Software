@@ -3,6 +3,8 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
+using Microsoft.Win32;
 using Devzone.Application.Catalog;
 using Devzone.Application.Customers;
 using Devzone.Application.Purchasing;
@@ -20,6 +22,7 @@ public partial class MainWindow : Window
     private readonly string _currencyCode;
     private string[] _activeNavigationItems = NavigationItems;
     private Button? _selectedNavigation;
+    private Button? _selectedAction;
     private readonly Dictionary<string, Button> _navigationButtons = new(StringComparer.OrdinalIgnoreCase);
 
     public MainWindow(AuthenticatedUser user, string companyName, string businessType, string currencyCode, IServiceProvider services)
@@ -35,7 +38,22 @@ public partial class MainWindow : Window
         _activeNavigationItems = GetBusinessProfile(_businessType).Pages;
         foreach (var item in _activeNavigationItems)
         {
-            var button = new Button { Content = item, Style = (Style)FindResource("NavButton") };
+            var button = new Button
+            {
+                Content = item,
+                Style = (Style)FindResource("NavButton"),
+                Tag = item == "Dashboard" ? "Active" : null
+            };
+            button.Opacity = 0;
+            button.Loaded += (_, _) =>
+            {
+                var index = NavigationPanel.Children.IndexOf(button);
+                button.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(220))
+                {
+                    BeginTime = TimeSpan.FromMilliseconds(index * 35),
+                    EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+                });
+            };
             button.Click += (_, _) => Navigate(item, button);
             NavigationPanel.Children.Add(button);
             _navigationButtons[item] = button;
@@ -57,9 +75,14 @@ public partial class MainWindow : Window
     private async void Navigate(string page, Button selected)
     {
         if (_selectedNavigation is not null)
-            _selectedNavigation.Background = Brushes.Transparent;
+        {
+            _selectedNavigation.Tag = null;
+            _selectedNavigation.ClearValue(ForegroundProperty);
+        }
         _selectedNavigation = selected;
-        selected.Background = (Brush)FindResource("SecondaryBackgroundBrush");
+        selected.Tag = "Active";
+        selected.ClearValue(ForegroundProperty);
+        ClearSelectedAction();
         PageTitle.Text = page;
         PageHeading.Text = page;
         PageDescription.Text = page switch
@@ -69,10 +92,27 @@ public partial class MainWindow : Window
             "Categories" => "Organize products into categories.",
             "Purchases" => "Receive supplier stock and track purchase costs.",
             "Customers" => "Manage customer profiles, balances, receipts, charges, and account ledgers.",
-            _ => "Review and record every stock adjustment."
+            "Stock Movements" => _businessType switch
+            {
+                "Grocery or convenience store" => "Track incoming deliveries, stock issues, and replenishment across your store items.",
+                "Clothing and fashion" => "Track stock changes for your styles, sizes, and accessories.",
+                "Electronics" => "Review stock receipts and adjustments for devices and accessories.",
+                "Restaurant or café" => "Track incoming ingredients, supply usage, and stock adjustments.",
+                "Wholesale and distribution" => "Review bulk stock receipts, issues, and inventory adjustments.",
+                "Pharmacy" => "Monitor medicine stock receipts and adjustments alongside batch and expiry details.",
+                "Beauty or salon" => "Track retail products and salon supply stock changes.",
+                "Home services" => "Review material receipts and stock used for service work.",
+                _ => "Review and record every stock receipt, issue, and adjustment."
+            },
+            _ => "Organize your business workspace."
         };
-        StatusMessage.Text = string.Empty;
-        StatusMessage.Foreground = (Brush)FindResource("SecondaryTextBrush");
+        MainScroll.ScrollToTop();
+        MainContent.Opacity = 0;
+        MainContent.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(220))
+        {
+            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+        });
+        ClearAlert();
         try
         {
             switch (page)
@@ -93,6 +133,7 @@ public partial class MainWindow : Window
 
     private async Task ShowDashboardAsync()
     {
+        ClearSelectedAction();
         MainContent.Children.Clear();
         MainContent.Children.Add(new TextBlock
         {
@@ -116,15 +157,17 @@ public partial class MainWindow : Window
                 .OrderBy(product => product.ExpiryDate).Take(8).ToArray()
             : [];
         var recentMovements = await catalog.GetStockMovementsAsync(_user.CompanyId, 8);
+        ClearSelectedAction();
         MainContent.Children.Clear();
         var toolbar = new DockPanel { LastChildFill = true, Margin = new Thickness(0, 0, 0, 16) };
         var refresh = CreateActionButton("Refresh data");
+        refresh.Click += (_, _) => SelectAction(refresh);
         refresh.Click += async (_, _) =>
         {
             try
             {
                 await ShowDashboardAsync();
-                StatusMessage.Text = $"Dashboard refreshed at {DateTime.Now:t}.";
+                ShowSuccess($"Dashboard refreshed at {DateTime.Now:t}.");
             }
             catch (Exception exception) { ShowError(exception.Message); }
         };
@@ -158,6 +201,7 @@ public partial class MainWindow : Window
         foreach (var page in workflow.Pages)
         {
             var quickLink = CreateActionButton(page);
+            quickLink.Click += (_, _) => SelectAction(quickLink);
             quickLink.Margin = new Thickness(0, 0, 8, 8);
             quickLink.Click += (_, _) =>
             {
@@ -284,6 +328,7 @@ public partial class MainWindow : Window
 
     private void ShowDashboardLoadError(Exception exception)
     {
+        ClearSelectedAction();
         MainContent.Children.Clear();
         MainContent.Children.Add(new Border
         {
@@ -304,6 +349,7 @@ public partial class MainWindow : Window
         {
             retry.Margin = new Thickness(0, 14, 0, 0);
             retry.HorizontalAlignment = HorizontalAlignment.Left;
+            retry.Click += (_, _) => SelectAction(retry);
             retry.Click += async (_, _) =>
             {
                 try { await ShowDashboardAsync(); }
@@ -453,44 +499,84 @@ public partial class MainWindow : Window
             ["Products", "Purchases", "Customers"])
     };
 
-    private async Task ShowProductsAsync(string? search = null)
+    private async Task ShowProductsAsync(string? search = null, Guid? categoryId = null)
     {
         using var scope = _services.CreateScope();
         var catalog = scope.ServiceProvider.GetRequiredService<IProductCatalogService>();
         var categories = await catalog.GetCategoriesAsync(_user.CompanyId);
-        var products = await catalog.SearchProductsAsync(_user.CompanyId, search);
+        var allProducts = await catalog.SearchProductsAsync(_user.CompanyId, search);
+        var products = categoryId.HasValue
+            ? allProducts.Where(product => categories.Any(category => category.Id == categoryId.Value &&
+                string.Equals(category.Name, product.CategoryName, StringComparison.OrdinalIgnoreCase))).ToArray()
+            : allProducts;
+        ClearSelectedAction();
         MainContent.Children.Clear();
         var pharmacyMode = _businessType == "Pharmacy";
 
         var toolbar = new DockPanel { LastChildFill = true, Margin = new Thickness(0, 0, 0, 14) };
         var actions = new StackPanel { Orientation = Orientation.Horizontal };
         var addButton = CreateActionButton("Add product");
+        addButton.Click += (_, _) => SelectAction(addButton);
         addButton.Click += async (_, _) =>
         {
             var dialog = new ProductEditorWindow(categories, _currencyCode, businessType: _businessType) { Owner = this };
             if (dialog.ShowDialog() == true)
             {
                 await SaveProductAsync(dialog.Draft!);
-                await ShowProductsAsync(search);
+                await ShowProductsAsync(search, categoryId);
             }
         };
         actions.Children.Add(addButton);
         var editButton = CreateActionButton("Edit selected");
+        editButton.Click += (_, _) => SelectAction(editButton);
         actions.Children.Add(editButton);
         var adjustButton = CreateActionButton("Adjust stock");
+        adjustButton.Click += (_, _) => SelectAction(adjustButton);
         actions.Children.Add(adjustButton);
         var archiveButton = CreateActionButton("Archive");
+        archiveButton.Click += (_, _) => SelectAction(archiveButton);
         actions.Children.Add(archiveButton);
         DockPanel.SetDock(actions, Dock.Right);
         toolbar.Children.Add(actions);
-        var searchBox = new TextBox { Width = 220, Height = 36, Padding = new Thickness(10, 7, 10, 7), Text = search ?? string.Empty, VerticalContentAlignment = VerticalAlignment.Center };
-        toolbar.Children.Add(searchBox);
+        var filterPanel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        filterPanel.Children.Add(new TextBlock { Text = "Category", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0), Foreground = (Brush)FindResource("SecondaryTextBrush") });
+        var categoryFilter = new ComboBox
+        {
+            Width = 170,
+            Height = 36,
+            Padding = new Thickness(8, 5, 8, 5),
+            ItemsSource = new[] { new CategoryItem(Guid.Empty, "All categories", null, allProducts.Count) }.Concat(categories).ToArray(),
+            DisplayMemberPath = nameof(CategoryItem.Name),
+            SelectedValuePath = nameof(CategoryItem.Id),
+        };
+        categoryFilter.SelectedValue = categoryId ?? Guid.Empty;
+        var searchBox = new TextBox { Width = 180, Height = 36, Padding = new Thickness(10, 7, 10, 7), Text = search ?? string.Empty, VerticalContentAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 0, 0) };
+        categoryFilter.SelectionChanged += async (_, _) =>
+        {
+            if (!categoryFilter.IsLoaded) return;
+            var selectedCategoryId = categoryFilter.SelectedValue is Guid selectedId && selectedId != Guid.Empty ? selectedId : (Guid?)null;
+            await ShowProductsAsync(searchBox.Text, selectedCategoryId);
+        };
+        filterPanel.Children.Add(categoryFilter);
+        filterPanel.Children.Add(searchBox);
+        toolbar.Children.Add(filterPanel);
         var searchButton = CreateActionButton("Search");
-        searchButton.Click += async (_, _) => await ShowProductsAsync(searchBox.Text);
+        searchButton.Click += (_, _) => SelectAction(searchButton);
+        searchButton.Click += async (_, _) => await ShowProductsAsync(searchBox.Text, categoryId);
         actions.Children.Insert(0, searchButton);
         MainContent.Children.Add(toolbar);
 
         var grid = CreateDataGrid();
+        if (categoryId.HasValue)
+        {
+            var categoryName = categories.FirstOrDefault(category => category.Id == categoryId.Value)?.Name;
+            MainContent.Children.Add(new TextBlock
+            {
+                Text = $"Products in {categoryName ?? "selected category"} · {products.Count} item{(products.Count == 1 ? string.Empty : "s")}",
+                Foreground = (Brush)FindResource("SecondaryTextBrush"),
+                Margin = new Thickness(0, 0, 0, 10)
+            });
+        }
         grid.Columns.Add(TextColumn("SKU", nameof(ProductItem.Sku), 110));
         grid.Columns.Add(TextColumn("Product", nameof(ProductItem.Name), 2));
         grid.Columns.Add(TextColumn("Category", nameof(ProductItem.CategoryName), 140));
@@ -508,6 +594,7 @@ public partial class MainWindow : Window
         grid.ItemsSource = products;
         MainContent.Children.Add(grid);
 
+        editButton.Click += (_, _) => SelectAction(editButton);
         editButton.Click += async (_, _) =>
         {
             if (grid.SelectedItem is not ProductItem product) { ShowError("Select a product first."); return; }
@@ -515,22 +602,25 @@ public partial class MainWindow : Window
             if (dialog.ShowDialog() == true)
             {
                 await SaveProductAsync(dialog.Draft!);
-                await ShowProductsAsync(searchBox.Text);
+                await ShowProductsAsync(searchBox.Text, categoryId);
             }
         };
+        adjustButton.Click += (_, _) => SelectAction(adjustButton);
         adjustButton.Click += async (_, _) =>
         {
             if (grid.SelectedItem is not ProductItem product) { ShowError("Select a product first."); return; }
             await AdjustStockAsync(product.Id, product.Name);
-            await ShowProductsAsync(searchBox.Text);
+            await ShowProductsAsync(searchBox.Text, categoryId);
         };
+        archiveButton.Click += (_, _) => SelectAction(archiveButton);
         archiveButton.Click += async (_, _) =>
         {
             if (grid.SelectedItem is not ProductItem product) { ShowError("Select a product first."); return; }
             if (MessageBox.Show(this, $"Archive {product.Name}? It will remain in transaction history.", "Archive product", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
             using var actionScope = _services.CreateScope();
             await actionScope.ServiceProvider.GetRequiredService<IProductCatalogService>().ArchiveProductAsync(_user.CompanyId, product.Id, _user.Username);
-            await ShowProductsAsync(searchBox.Text);
+            ShowSuccess($"{product.Name} was archived.");
+            await ShowProductsAsync(searchBox.Text, categoryId);
         };
     }
 
@@ -539,10 +629,12 @@ public partial class MainWindow : Window
         using var scope = _services.CreateScope();
         var catalog = scope.ServiceProvider.GetRequiredService<IProductCatalogService>();
         var categories = await catalog.GetCategoriesAsync(_user.CompanyId);
+        ClearSelectedAction();
         MainContent.Children.Clear();
         var addButton = CreateActionButton("Add category");
         addButton.HorizontalAlignment = HorizontalAlignment.Left;
         addButton.Margin = new Thickness(0, 0, 0, 14);
+        addButton.Click += (_, _) => SelectAction(addButton);
         addButton.Click += async (_, _) =>
         {
             var dialog = new CategoryEditorWindow { Owner = this };
@@ -552,6 +644,7 @@ public partial class MainWindow : Window
                 using var saveScope = _services.CreateScope();
                 await saveScope.ServiceProvider.GetRequiredService<IProductCatalogService>()
                     .SaveCategoryAsync(_user.CompanyId, dialog.CategoryName, dialog.Description, _user.Username);
+                ShowSuccess($"Category '{dialog.CategoryName}' was added.");
                 await ShowCategoriesAsync();
             }
             catch (Exception exception) { ShowError(exception.Message); }
@@ -562,20 +655,62 @@ public partial class MainWindow : Window
         grid.Columns.Add(TextColumn("Description", nameof(CategoryItem.Description), 3));
         grid.Columns.Add(TextColumn("Products", nameof(CategoryItem.ProductCount), 100));
         grid.ItemsSource = categories;
+        var viewProductsButton = CreateActionButton("View products");
+        viewProductsButton.HorizontalAlignment = HorizontalAlignment.Left;
+        viewProductsButton.Margin = new Thickness(0, 0, 0, 12);
+        viewProductsButton.Click += (_, _) => SelectAction(viewProductsButton);
+        viewProductsButton.Click += async (_, _) =>
+        {
+            if (grid.SelectedItem is not CategoryItem selectedCategory)
+            {
+                ShowError("Select a category first.");
+                return;
+            }
+
+            if (_navigationButtons.TryGetValue("Products", out var productsButton))
+            {
+                Navigate("Products", productsButton);
+                await ShowProductsAsync(categoryId: selectedCategory.Id);
+                ShowSuccess($"Showing products in '{selectedCategory.Name}'.");
+            }
+        };
+        MainContent.Children.Insert(0, viewProductsButton);
+        grid.MouseDoubleClick += async (_, _) =>
+        {
+            if (grid.SelectedItem is not CategoryItem selectedCategory) return;
+            if (_navigationButtons.TryGetValue("Products", out var productsButton))
+            {
+                Navigate("Products", productsButton);
+                await ShowProductsAsync(categoryId: selectedCategory.Id);
+                ShowSuccess($"Showing products in '{selectedCategory.Name}'.");
+            }
+        };
         MainContent.Children.Add(grid);
     }
 
-    private async Task ShowStockMovementsAsync()
+    private async Task ShowStockMovementsAsync(string? search = null, string? productSku = null, string movementType = "All movements", DateTime? fromDate = null, DateTime? toDate = null)
     {
         using var scope = _services.CreateScope();
         var catalog = scope.ServiceProvider.GetRequiredService<IProductCatalogService>();
         var products = await catalog.SearchProductsAsync(_user.CompanyId);
-        var movements = await catalog.GetStockMovementsAsync(_user.CompanyId);
+        var allMovements = await catalog.GetStockMovementsAsync(_user.CompanyId, 1000);
+        var movements = allMovements.Where(movement =>
+                (string.IsNullOrWhiteSpace(search) || movement.ProductName.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                 movement.ProductSku.Contains(search, StringComparison.OrdinalIgnoreCase) || movement.Reason.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                 movement.Username.Contains(search, StringComparison.OrdinalIgnoreCase)) &&
+                (string.IsNullOrWhiteSpace(productSku) || string.Equals(movement.ProductSku, productSku, StringComparison.OrdinalIgnoreCase)) &&
+                (movementType == "All movements" || movementType == "Stock received" && movement.QuantityChange > 0 ||
+                 movementType == "Stock issued" && movement.QuantityChange < 0) &&
+                (!fromDate.HasValue || movement.OccurredAt.LocalDateTime.Date >= fromDate.Value.Date) &&
+                (!toDate.HasValue || movement.OccurredAt.LocalDateTime.Date <= toDate.Value.Date))
+            .ToArray();
+        ClearSelectedAction();
         MainContent.Children.Clear();
         var adjustButton = CreateActionButton("New stock adjustment");
         adjustButton.HorizontalAlignment = HorizontalAlignment.Left;
         adjustButton.Margin = new Thickness(0, 0, 0, 14);
         adjustButton.IsEnabled = products.Count > 0;
+        adjustButton.Click += (_, _) => SelectAction(adjustButton);
         adjustButton.Click += async (_, _) =>
         {
             var dialog = new StockAdjustmentWindow(products) { Owner = this };
@@ -585,11 +720,74 @@ public partial class MainWindow : Window
                 using var saveScope = _services.CreateScope();
                 await saveScope.ServiceProvider.GetRequiredService<IProductCatalogService>().AdjustStockAsync(
                     _user.CompanyId, dialog.ProductId, dialog.QuantityChange, dialog.Reason, _user.Username);
-                await ShowStockMovementsAsync();
+                await ShowStockMovementsAsync(search, productSku, movementType, fromDate, toDate);
+                ShowSuccess("Stock adjustment saved.");
             }
             catch (Exception exception) { ShowError(exception.Message); }
         };
-        MainContent.Children.Add(adjustButton);
+        var inboundQuantity = movements.Where(movement => movement.QuantityChange > 0).Sum(movement => movement.QuantityChange);
+        var outboundQuantity = movements.Where(movement => movement.QuantityChange < 0).Sum(movement => Math.Abs(movement.QuantityChange));
+        MainContent.Children.Add(new UniformGrid
+        {
+            Columns = 3,
+            Margin = new Thickness(0, 0, 0, 18),
+            Children =
+            {
+                CreateMetricCard("Movements", movements.Length.ToString("N0"), "Records matching the current filters"),
+                CreateMetricCard("Stock received", inboundQuantity.ToString("N0.###"), "Total quantity added"),
+                CreateMetricCard("Stock issued", outboundQuantity.ToString("N0.###"), "Total quantity removed")
+            }
+        });
+
+        var filterPanel = new WrapPanel { Margin = new Thickness(0, 0, 0, 14), VerticalAlignment = VerticalAlignment.Center };
+        var searchBox = new TextBox
+        {
+            Width = 220, Height = 36, Padding = new Thickness(10, 7, 10, 7),
+            Text = search ?? string.Empty, VerticalContentAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 8, 8), ToolTip = "Search product, SKU, reason, or user"
+        };
+        filterPanel.Children.Add(searchBox);
+        var productBox = new ComboBox
+        {
+            Width = 210, Height = 36, Padding = new Thickness(8, 5, 8, 5),
+            ItemsSource = new[] { "All products" }.Concat(products.Select(product => $"{product.Sku} · {product.Name}")).ToArray(),
+            SelectedItem = string.IsNullOrWhiteSpace(productSku) ? "All products" : products.FirstOrDefault(product => product.Sku == productSku) is { } selectedProduct ? $"{selectedProduct.Sku} · {selectedProduct.Name}" : "All products",
+            Margin = new Thickness(0, 0, 8, 8)
+        };
+        filterPanel.Children.Add(productBox);
+        var typeBox = new ComboBox
+        {
+            Width = 145, Height = 36, Padding = new Thickness(8, 5, 8, 5),
+            ItemsSource = new[] { "All movements", "Stock received", "Stock issued" },
+            SelectedItem = movementType,
+            Margin = new Thickness(0, 0, 8, 8)
+        };
+        filterPanel.Children.Add(typeBox);
+        var fromPicker = new DatePicker { Width = 130, Height = 36, SelectedDate = fromDate, ToolTip = "From date", Margin = new Thickness(0, 0, 8, 8) };
+        var toPicker = new DatePicker { Width = 130, Height = 36, SelectedDate = toDate, ToolTip = "To date", Margin = new Thickness(0, 0, 8, 8) };
+        filterPanel.Children.Add(fromPicker);
+        filterPanel.Children.Add(toPicker);
+        var applyButton = CreateActionButton("Apply filters");
+        applyButton.Margin = new Thickness(0, 0, 8, 8);
+        applyButton.Click += (_, _) => SelectAction(applyButton);
+        applyButton.Click += async (_, _) =>
+        {
+            if (fromPicker.SelectedDate.HasValue && toPicker.SelectedDate.HasValue && fromPicker.SelectedDate > toPicker.SelectedDate)
+            {
+                ShowError("The start date must be on or before the end date.");
+                return;
+            }
+            var selectedSku = productBox.SelectedItem?.ToString()?.Split(" · ", 2)[0];
+            await ShowStockMovementsAsync(searchBox.Text, productBox.SelectedItem?.ToString() == "All products" ? null : selectedSku,
+                typeBox.SelectedItem?.ToString() ?? "All movements", fromPicker.SelectedDate, toPicker.SelectedDate);
+        };
+        filterPanel.Children.Add(applyButton);
+        var exportButton = CreateActionButton("Export CSV");
+        exportButton.Margin = new Thickness(0, 0, 8, 8);
+        exportButton.Click += (_, _) => SelectAction(exportButton);
+        exportButton.Click += (_, _) => ExportStockMovements(movements);
+        filterPanel.Children.Add(exportButton);
+        MainContent.Children.Add(filterPanel);
         var grid = CreateDataGrid();
         grid.Columns.Add(TextColumn("Date", nameof(StockMovementItem.OccurredAt), 160));
         grid.Columns.Add(TextColumn("SKU", nameof(StockMovementItem.ProductSku), 100));
@@ -602,16 +800,63 @@ public partial class MainWindow : Window
         MainContent.Children.Add(grid);
     }
 
+    private void ExportStockMovements(IReadOnlyList<StockMovementItem> movements)
+    {
+        var dialog = new SaveFileDialog
+        {
+            Title = "Export stock movements",
+            FileName = $"stock-movements-{DateTime.Today:yyyy-MM-dd}.csv",
+            Filter = "CSV files (*.csv)|*.csv",
+            DefaultExt = ".csv",
+            AddExtension = true
+        };
+        if (dialog.ShowDialog(this) != true) return;
+
+        static string Csv(string value) => $"\"{value.Replace("\"", "\"\"")}\"";
+        var rows = new List<string>
+        {
+            "Date,SKU,Product,Quantity change,Balance after,Reason,Recorded by"
+        };
+        rows.AddRange(movements.Select(movement => string.Join(",", new[]
+        {
+            Csv(movement.OccurredAt.LocalDateTime.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)),
+            Csv(movement.ProductSku), Csv(movement.ProductName), Csv(movement.QuantityChange.ToString("0.###", CultureInfo.InvariantCulture)),
+            Csv(movement.BalanceAfter.ToString("0.###", CultureInfo.InvariantCulture)), Csv(movement.Reason), Csv(movement.Username)
+        })));
+        try
+        {
+            System.IO.File.WriteAllLines(dialog.FileName, rows, new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+            ShowSuccess($"Exported {movements.Count:N0} stock movement records.");
+        }
+        catch (Exception exception) { ShowError($"Could not export stock movements: {exception.Message}"); }
+    }
+
     private async Task ShowCustomersAsync(string? search = null)
     {
         using var scope = _services.CreateScope();
         var customerService = scope.ServiceProvider.GetRequiredService<ICustomerService>();
         var customers = await customerService.SearchAsync(_user.CompanyId, search);
+        ClearSelectedAction();
         MainContent.Children.Clear();
+
+        var businessCustomers = customers.Count(customer => !string.IsNullOrWhiteSpace(customer.BusinessName));
+        var outstandingBalance = customers.Where(customer => customer.Balance > 0).Sum(customer => customer.Balance);
+        MainContent.Children.Add(new UniformGrid
+        {
+            Columns = 3,
+            Margin = new Thickness(0, 0, 0, 18),
+            Children =
+            {
+                CreateMetricCard("Customers", customers.Count.ToString("N0"), string.IsNullOrWhiteSpace(search) ? "Active customer records" : "Customers matching this search"),
+                CreateMetricCard("Business accounts", businessCustomers.ToString("N0"), "Customers linked to a business"),
+                CreateMetricCard("Outstanding balance", $"{_currencyCode} {outstandingBalance:N2}", "Positive balances across this customer list")
+            }
+        });
 
         var toolbar = new DockPanel { LastChildFill = true, Margin = new Thickness(0, 0, 0, 14) };
         var actions = new StackPanel { Orientation = Orientation.Horizontal };
         var addButton = CreateActionButton("Add customer");
+        addButton.Click += (_, _) => SelectAction(addButton);
         addButton.Click += async (_, _) =>
         {
             var dialog = new CustomerEditorWindow(_currencyCode) { Owner = this };
@@ -635,6 +880,7 @@ public partial class MainWindow : Window
         var searchBox = new TextBox { Width = 220, Height = 36, Padding = new Thickness(10, 7, 10, 7), Text = search ?? string.Empty, VerticalContentAlignment = VerticalAlignment.Center };
         toolbar.Children.Add(searchBox);
         var searchButton = CreateActionButton("Search");
+        searchButton.Click += (_, _) => SelectAction(searchButton);
         searchButton.Click += async (_, _) => await ShowCustomersAsync(searchBox.Text);
         actions.Children.Insert(0, searchButton);
         MainContent.Children.Add(toolbar);
@@ -642,6 +888,7 @@ public partial class MainWindow : Window
         var grid = CreateDataGrid();
         grid.Columns.Add(TextColumn("Code", nameof(CustomerItem.Code), 100));
         grid.Columns.Add(TextColumn("Customer", nameof(CustomerItem.Name), 2));
+        grid.Columns.Add(TextColumn("Business name", nameof(CustomerItem.BusinessName), 2));
         grid.Columns.Add(TextColumn("Phone", nameof(CustomerItem.Phone), 130));
         grid.Columns.Add(TextColumn("Email", nameof(CustomerItem.Email), 2));
         grid.Columns.Add(TextColumn("Credit limit", nameof(CustomerItem.CreditLimit), 110));
@@ -649,6 +896,7 @@ public partial class MainWindow : Window
         grid.ItemsSource = customers;
         MainContent.Children.Add(grid);
 
+        editButton.Click += (_, _) => SelectAction(editButton);
         editButton.Click += async (_, _) =>
         {
             if (grid.SelectedItem is not CustomerItem customer) { ShowError("Select a customer first."); return; }
@@ -659,8 +907,11 @@ public partial class MainWindow : Window
                 await ShowCustomersAsync(searchBox.Text);
             }
         };
+        receiptButton.Click += (_, _) => SelectAction(receiptButton);
         receiptButton.Click += async (_, _) => await RecordCustomerActivityAsync(grid.SelectedItem as CustomerItem, false, searchBox.Text);
+        chargeButton.Click += (_, _) => SelectAction(chargeButton);
         chargeButton.Click += async (_, _) => await RecordCustomerActivityAsync(grid.SelectedItem as CustomerItem, true, searchBox.Text);
+        ledgerButton.Click += (_, _) => SelectAction(ledgerButton);
         ledgerButton.Click += async (_, _) =>
         {
             if (grid.SelectedItem is not CustomerItem customer) { ShowError("Select a customer first."); return; }
@@ -672,18 +923,27 @@ public partial class MainWindow : Window
         };
     }
 
-    private async Task ShowPurchasesAsync()
+    private async Task ShowPurchasesAsync(string? search = null, string? supplierFilter = null)
     {
         using var scope = _services.CreateScope();
         var purchasing = scope.ServiceProvider.GetRequiredService<IPurchasingService>();
         var catalog = scope.ServiceProvider.GetRequiredService<IProductCatalogService>();
-        var purchases = await purchasing.GetPurchasesAsync(_user.CompanyId);
+        var allPurchases = await purchasing.GetPurchasesAsync(_user.CompanyId, 1000);
+        var purchases = allPurchases.Where(purchase =>
+            (string.IsNullOrWhiteSpace(supplierFilter) || string.Equals(purchase.SupplierName, supplierFilter, StringComparison.OrdinalIgnoreCase)) &&
+            (string.IsNullOrWhiteSpace(search) || purchase.Reference.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+             purchase.SupplierName.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+             purchase.ProductName.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+             purchase.ProductSku.Contains(search, StringComparison.OrdinalIgnoreCase)))
+            .ToArray();
         var products = await catalog.SearchProductsAsync(_user.CompanyId);
+        ClearSelectedAction();
         MainContent.Children.Clear();
         var receiveButton = CreateActionButton("Receive purchase");
         receiveButton.HorizontalAlignment = HorizontalAlignment.Left;
         receiveButton.Margin = new Thickness(0, 0, 0, 14);
         receiveButton.IsEnabled = products.Count > 0;
+        receiveButton.Click += (_, _) => SelectAction(receiveButton);
         receiveButton.Click += async (_, _) =>
         {
             var dialog = new PurchaseReceiveWindow(products, _currencyCode) { Owner = this };
@@ -693,12 +953,58 @@ public partial class MainWindow : Window
                 using var receiveScope = _services.CreateScope();
                 await receiveScope.ServiceProvider.GetRequiredService<IPurchasingService>()
                     .ReceiveAsync(_user.CompanyId, dialog.Draft!, _user.Username);
-                StatusMessage.Text = "Purchase received; inventory and average cost updated.";
-                await ShowPurchasesAsync();
+                await ShowPurchasesAsync(search, supplierFilter);
+                ShowSuccess("Purchase received. Inventory and average cost were updated.");
             }
             catch (Exception exception) { ShowError(exception.Message); }
         };
-        MainContent.Children.Add(receiveButton);
+        MainContent.Children.Add(new UniformGrid
+        {
+            Columns = 3,
+            Margin = new Thickness(0, 0, 0, 18),
+            Children =
+            {
+                CreateMetricCard("Receipts in this view", purchases.Length.ToString("N0"), "Purchase records matching your filters"),
+                CreateMetricCard("Purchase value", $"{_currencyCode} {purchases.Sum(purchase => purchase.TotalCost):N2}", "Total of the displayed receipts"),
+                CreateMetricCard("Suppliers", purchases.Select(purchase => purchase.SupplierName).Distinct(StringComparer.OrdinalIgnoreCase).Count().ToString("N0"), "Suppliers in the displayed receipts")
+            }
+        });
+
+        var toolbar = new DockPanel { LastChildFill = true, Margin = new Thickness(0, 0, 0, 14) };
+        var filterPanel = new StackPanel { Orientation = Orientation.Horizontal };
+        var searchBox = new TextBox
+        {
+            Width = 240,
+            Height = 36,
+            Padding = new Thickness(10, 7, 10, 7),
+            Text = search ?? string.Empty,
+            VerticalContentAlignment = VerticalAlignment.Center
+        };
+        filterPanel.Children.Add(searchBox);
+        var searchButton = CreateActionButton("Search");
+        searchButton.Click += (_, _) => SelectAction(searchButton);
+        searchButton.Click += async (_, _) => await ShowPurchasesAsync(searchBox.Text, supplierFilter);
+        filterPanel.Children.Add(searchButton);
+        var supplierBox = new ComboBox
+        {
+            Width = 200,
+            Height = 36,
+            Margin = new Thickness(8, 0, 0, 0),
+            Padding = new Thickness(8, 5, 8, 5),
+            ItemsSource = new[] { "All suppliers" }.Concat(allPurchases.Select(purchase => purchase.SupplierName)
+                .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(name => name, StringComparer.OrdinalIgnoreCase)).ToArray(),
+            SelectedItem = supplierFilter ?? "All suppliers"
+        };
+        supplierBox.SelectionChanged += async (_, _) =>
+        {
+            if (!supplierBox.IsLoaded || supplierBox.SelectedItem is not string selectedSupplier) return;
+            await ShowPurchasesAsync(searchBox.Text, selectedSupplier == "All suppliers" ? null : selectedSupplier);
+        };
+        filterPanel.Children.Add(supplierBox);
+        DockPanel.SetDock(receiveButton, Dock.Right);
+        toolbar.Children.Add(receiveButton);
+        toolbar.Children.Add(filterPanel);
+        MainContent.Children.Add(toolbar);
         var grid = CreateDataGrid();
         grid.Columns.Add(TextColumn("Received", nameof(PurchaseItem.ReceivedAt), 155));
         grid.Columns.Add(TextColumn("Reference", nameof(PurchaseItem.Reference), 120));
@@ -719,7 +1025,7 @@ public partial class MainWindow : Window
         {
             using var scope = _services.CreateScope();
             await scope.ServiceProvider.GetRequiredService<ICustomerService>().SaveAsync(_user.CompanyId, draft, _user.Username);
-            StatusMessage.Text = "Customer saved.";
+            ShowSuccess($"Customer '{draft.Name}' was saved.");
         }
         catch (Exception exception) { ShowError(exception.Message); }
     }
@@ -738,7 +1044,7 @@ public partial class MainWindow : Window
             else
                 await service.RecordReceiptAsync(_user.CompanyId, customer.Id, dialog.Amount, dialog.Description, _user.Username);
             await ShowCustomersAsync(search);
-            StatusMessage.Text = isCharge ? "Customer charge recorded." : "Customer receipt recorded.";
+            ShowSuccess(isCharge ? "Customer charge recorded." : "Customer receipt recorded.");
         }
         catch (Exception exception) { ShowError(exception.Message); }
     }
@@ -749,7 +1055,7 @@ public partial class MainWindow : Window
         {
             using var scope = _services.CreateScope();
             await scope.ServiceProvider.GetRequiredService<IProductCatalogService>().SaveProductAsync(_user.CompanyId, draft, _user.Username);
-            StatusMessage.Text = "Product saved.";
+            ShowSuccess($"Product '{draft.Name}' was saved.");
         }
         catch (Exception exception) { ShowError(exception.Message); }
     }
@@ -764,7 +1070,7 @@ public partial class MainWindow : Window
             using var scope = _services.CreateScope();
             await scope.ServiceProvider.GetRequiredService<IProductCatalogService>().AdjustStockAsync(
                 _user.CompanyId, productId, dialog.QuantityChange, dialog.Reason, _user.Username);
-            StatusMessage.Text = "Stock updated.";
+            ShowSuccess($"Stock updated for {productName}.");
         }
         catch (Exception exception) { ShowError(exception.Message); }
     }
@@ -814,10 +1120,44 @@ public partial class MainWindow : Window
         Padding = new Thickness(12, 8, 12, 8)
     };
 
-    private void ShowError(string message)
+    private void SelectAction(Button button)
+    {
+        if (_selectedAction is not null && !ReferenceEquals(_selectedAction, button))
+        {
+            _selectedAction.Tag = null;
+            _selectedAction.ClearValue(ForegroundProperty);
+        }
+
+        _selectedAction = button;
+        button.Tag = "Active";
+        button.ClearValue(ForegroundProperty);
+    }
+
+    private void ClearSelectedAction()
+    {
+        if (_selectedAction is null) return;
+        _selectedAction.Tag = null;
+        _selectedAction.ClearValue(ForegroundProperty);
+        _selectedAction = null;
+    }
+
+    private void ShowSuccess(string message) => ShowAlert(message, isError: false);
+
+    private void ShowError(string message) => ShowAlert(message, isError: true);
+
+    private void ClearAlert()
+    {
+        StatusMessage.Text = string.Empty;
+        StatusAlert.Visibility = Visibility.Collapsed;
+    }
+
+    private void ShowAlert(string message, bool isError)
     {
         StatusMessage.Text = message;
-        StatusMessage.Foreground = Brushes.Firebrick;
+        StatusMessage.Foreground = (Brush)FindResource(isError ? "DangerBrush" : "AccentHoverBrush");
+        StatusAlert.Background = (Brush)FindResource(isError ? "DangerSoftBrush" : "AccentSoftBrush");
+        StatusAlert.BorderBrush = (Brush)FindResource(isError ? "DangerSoftBorderBrush" : "AccentSoftBorderBrush");
+        StatusAlert.Visibility = Visibility.Visible;
     }
 }
 
@@ -873,6 +1213,7 @@ internal sealed class CustomerEditorWindow : Window
 {
     private readonly TextBox _code = new();
     private readonly TextBox _name = new();
+    private readonly TextBox _businessName = new();
     private readonly TextBox _phone = new();
     private readonly TextBox _email = new();
     private readonly TextBox _address = new();
@@ -893,6 +1234,7 @@ internal sealed class CustomerEditorWindow : Window
         var panel = new StackPanel { Margin = new Thickness(24) };
         ProductEditorWindow.AddField(panel, "Customer code", _code);
         ProductEditorWindow.AddField(panel, "Customer name", _name);
+        ProductEditorWindow.AddField(panel, "Business name (optional)", _businessName);
         ProductEditorWindow.AddField(panel, "Phone", _phone);
         ProductEditorWindow.AddField(panel, "Email", _email);
         ProductEditorWindow.AddField(panel, "Address", _address);
@@ -904,6 +1246,7 @@ internal sealed class CustomerEditorWindow : Window
         {
             _code.Text = existing.Code;
             _name.Text = existing.Name;
+            _businessName.Text = existing.BusinessName ?? string.Empty;
             _phone.Text = existing.Phone ?? string.Empty;
             _email.Text = existing.Email ?? string.Empty;
             _address.Text = existing.Address ?? string.Empty;
@@ -928,7 +1271,7 @@ internal sealed class CustomerEditorWindow : Window
             return;
         }
         Draft = new CustomerDraft(_existing?.Id, _code.Text, _name.Text, _phone.Text, _email.Text,
-            _address.Text, creditLimit, _existing is null ? openingBalance : 0);
+            _address.Text, creditLimit, _existing is null ? openingBalance : 0, _businessName.Text);
         DialogResult = true;
     }
 }

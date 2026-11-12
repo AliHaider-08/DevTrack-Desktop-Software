@@ -109,6 +109,7 @@ public sealed class DevzoneDbContext(DbContextOptions<DevzoneDbContext> options)
             entity.Property(customer => customer.NormalizedCode).HasMaxLength(40).IsRequired();
             entity.Property(customer => customer.Name).HasMaxLength(200).IsRequired();
             entity.Property(customer => customer.NormalizedName).HasMaxLength(200).IsRequired();
+            entity.Property(customer => customer.BusinessName).HasMaxLength(200);
             entity.Property(customer => customer.Phone).HasMaxLength(40);
             entity.Property(customer => customer.Email).HasMaxLength(200);
             entity.Property(customer => customer.Address).HasMaxLength(500);

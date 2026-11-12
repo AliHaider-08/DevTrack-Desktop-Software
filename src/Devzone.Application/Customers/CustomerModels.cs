@@ -2,11 +2,11 @@ namespace Devzone.Application.Customers;
 
 public sealed record CustomerItem(
     Guid Id, string Code, string Name, string? Phone, string? Email, string? Address,
-    decimal CreditLimit, decimal Balance, bool IsActive);
+    decimal CreditLimit, decimal Balance, bool IsActive, string? BusinessName = null);
 
 public sealed record CustomerDraft(
     Guid? Id, string Code, string Name, string? Phone, string? Email, string? Address,
-    decimal CreditLimit, decimal OpeningBalance);
+    decimal CreditLimit, decimal OpeningBalance, string? BusinessName = null);
 
 public sealed record CustomerLedgerItem(
     DateTimeOffset OccurredAt, string Type, decimal BalanceChange, decimal BalanceAfter,

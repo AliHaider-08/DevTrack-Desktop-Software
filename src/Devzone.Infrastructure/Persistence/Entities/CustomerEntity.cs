@@ -8,6 +8,7 @@ public sealed class CustomerEntity
     public string NormalizedCode { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
     public string NormalizedName { get; set; } = string.Empty;
+    public string? BusinessName { get; set; }
     public string? Phone { get; set; }
     public string? Email { get; set; }
     public string? Address { get; set; }

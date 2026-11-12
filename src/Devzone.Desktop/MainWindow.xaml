@@ -40,7 +40,9 @@
                 <StackPanel Margin="28">
                     <TextBlock x:Name="PageHeading" Text="Dashboard" FontSize="27" FontWeight="SemiBold" />
                     <TextBlock x:Name="PageDescription" Text="Business data from your local workspace." Foreground="{StaticResource SecondaryTextBrush}" Margin="0,6,0,22" />
-                    <TextBlock x:Name="StatusMessage" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap" Margin="0,0,0,12" />
+                    <Border x:Name="StatusAlert" Visibility="Collapsed" CornerRadius="8" Padding="12,10" Margin="0,0,0,14" BorderThickness="1">
+                        <TextBlock x:Name="StatusMessage" TextWrapping="Wrap" />
+                    </Border>
                     <StackPanel x:Name="MainContent" />
                 </StackPanel>
             </ScrollViewer>

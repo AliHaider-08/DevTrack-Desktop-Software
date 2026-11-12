@@ -15,6 +15,7 @@ public sealed class CustomerService(DevzoneDbContext dbContext) : ICustomerServi
         {
             var term = search.Trim();
             query = query.Where(customer => customer.Name.Contains(term) || customer.Code.Contains(term) ||
+                (customer.BusinessName != null && customer.BusinessName.Contains(term)) ||
                 (customer.Phone != null && customer.Phone.Contains(term)) || (customer.Email != null && customer.Email.Contains(term)));
         }
 
@@ -27,7 +28,7 @@ public sealed class CustomerService(DevzoneDbContext dbContext) : ICustomerServi
             .ToDictionary(group => group.Key, group => decimal.Round(group.Sum(entry => entry.BalanceChange), 2, MidpointRounding.AwayFromZero));
         return customers.Select(customer => new CustomerItem(customer.Id, customer.Code, customer.Name,
             customer.Phone, customer.Email, customer.Address, customer.CreditLimit,
-            balances.GetValueOrDefault(customer.Id), customer.IsActive)).ToArray();
+            balances.GetValueOrDefault(customer.Id), customer.IsActive, customer.BusinessName)).ToArray();
     }
 
     public async Task SaveAsync(Guid companyId, CustomerDraft draft, string username, CancellationToken cancellationToken = default)
@@ -35,8 +36,11 @@ public sealed class CustomerService(DevzoneDbContext dbContext) : ICustomerServi
         ArgumentNullException.ThrowIfNull(draft);
         var code = draft.Code.Trim();
         var name = draft.Name.Trim();
+        var businessName = Clean(draft.BusinessName);
         if (code.Length is < 1 or > 40 || name.Length is < 2 or > 200)
             throw new ArgumentException("Customer code and name are required and must fit their field limits.");
+        if (businessName?.Length > 200)
+            throw new ArgumentException("Business name cannot exceed 200 characters.", nameof(draft));
         if (draft.CreditLimit < 0)
             throw new ArgumentException("Credit limit cannot be negative.", nameof(draft));
         var normalizedCode = code.ToUpperInvariant();
@@ -56,6 +60,7 @@ public sealed class CustomerService(DevzoneDbContext dbContext) : ICustomerServi
         customer.NormalizedCode = normalizedCode;
         customer.Name = name;
         customer.NormalizedName = name.ToUpperInvariant();
+        customer.BusinessName = businessName;
         customer.Phone = Clean(draft.Phone);
         customer.Email = Clean(draft.Email)?.ToLowerInvariant();
         customer.Address = Clean(draft.Address);

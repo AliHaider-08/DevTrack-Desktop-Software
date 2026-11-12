@@ -11,6 +11,9 @@
     <Color x:Key="HeroColor">#102E3A</Color>
     <Color x:Key="HeroDeepColor">#173F4B</Color>
     <Color x:Key="AccentSoftColor">#E5F2EF</Color>
+    <Color x:Key="DangerSoftColor">#FBECE9</Color>
+    <Color x:Key="AccentSoftBorderColor">#B9DCD5</Color>
+    <Color x:Key="DangerSoftBorderColor">#E9C3BC</Color>
     <SolidColorBrush x:Key="PrimaryBackgroundBrush" Color="{StaticResource PrimaryBackgroundColor}" />
     <SolidColorBrush x:Key="SecondaryBackgroundBrush" Color="{StaticResource SecondaryBackgroundColor}" />
     <SolidColorBrush x:Key="PrimaryTextBrush" Color="{StaticResource PrimaryTextColor}" />
@@ -20,6 +23,9 @@
     <SolidColorBrush x:Key="AccentHoverBrush" Color="{StaticResource AccentHoverColor}" />
     <SolidColorBrush x:Key="DangerBrush" Color="{StaticResource DangerColor}" />
     <SolidColorBrush x:Key="AccentSoftBrush" Color="{StaticResource AccentSoftColor}" />
+    <SolidColorBrush x:Key="DangerSoftBrush" Color="{StaticResource DangerSoftColor}" />
+    <SolidColorBrush x:Key="AccentSoftBorderBrush" Color="{StaticResource AccentSoftBorderColor}" />
+    <SolidColorBrush x:Key="DangerSoftBorderBrush" Color="{StaticResource DangerSoftBorderColor}" />
     <SolidColorBrush x:Key="HeroOrbBrush" Color="#FF69C9BC" />
     <LinearGradientBrush x:Key="HeroBrush" StartPoint="0,0" EndPoint="1,1">
         <GradientStop Color="{StaticResource HeroColor}" Offset="0" />
@@ -32,8 +38,32 @@
         <Setter Property="FontFamily" Value="Segoe UI" />
         <Setter Property="FontSize" Value="14" />
     </Style>
+    <Style TargetType="Button">
+        <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
+        <Setter Property="RenderTransform">
+            <Setter.Value><ScaleTransform ScaleX="1" ScaleY="1" /></Setter.Value>
+        </Setter>
+        <Style.Triggers>
+            <EventTrigger RoutedEvent="MouseEnter">
+                <BeginStoryboard>
+                    <Storyboard>
+                        <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="1.025" Duration="0:0:0.14" />
+                        <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="1.025" Duration="0:0:0.14" />
+                    </Storyboard>
+                </BeginStoryboard>
+            </EventTrigger>
+            <EventTrigger RoutedEvent="MouseLeave">
+                <BeginStoryboard>
+                    <Storyboard>
+                        <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="1" Duration="0:0:0.14" />
+                        <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="1" Duration="0:0:0.14" />
+                    </Storyboard>
+                </BeginStoryboard>
+            </EventTrigger>
+        </Style.Triggers>
+    </Style>
     <Style x:Key="NavButton" TargetType="Button">
-        <Setter Property="Foreground" Value="{StaticResource PrimaryTextBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource SecondaryTextBrush}" />
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderThickness" Value="0" />
         <Setter Property="HorizontalContentAlignment" Value="Left" />
@@ -47,7 +77,24 @@
                         <ContentPresenter VerticalAlignment="Center" />
                     </Border>
                     <ControlTemplate.Triggers>
-                        <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="NavBorder" Property="Background" Value="{StaticResource SecondaryBackgroundBrush}" /></Trigger>
+                        <Trigger Property="Tag" Value="Active">
+                            <Setter TargetName="NavBorder" Property="Background" Value="{StaticResource AccentBrush}" />
+                            <Setter Property="Foreground" Value="White" />
+                            <Setter Property="FontWeight" Value="SemiBold" />
+                        </Trigger>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="NavBorder" Property="Background" Value="{StaticResource AccentSoftBrush}" />
+                            <Setter Property="Foreground" Value="{StaticResource AccentHoverBrush}" />
+                        </Trigger>
+                        <MultiDataTrigger>
+                            <MultiDataTrigger.Conditions>
+                                <Condition Binding="{Binding Tag, RelativeSource={RelativeSource Self}}" Value="Active" />
+                                <Condition Binding="{Binding IsMouseOver, RelativeSource={RelativeSource Self}}" Value="True" />
+                            </MultiDataTrigger.Conditions>
+                            <Setter TargetName="NavBorder" Property="Background" Value="{StaticResource AccentBrush}" />
+                            <Setter Property="Foreground" Value="White" />
+                            <Setter Property="FontWeight" Value="SemiBold" />
+                        </MultiDataTrigger>
                         <Trigger Property="IsPressed" Value="True"><Setter TargetName="NavBorder" Property="Opacity" Value="0.75" /></Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -60,5 +107,19 @@
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="CornerRadius" Value="12" />
         <Setter Property="Padding" Value="18" />
+        <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
+        <Setter Property="RenderTransform">
+            <Setter.Value><TranslateTransform Y="0" /></Setter.Value>
+        </Setter>
+        <Style.Triggers>
+            <EventTrigger RoutedEvent="Loaded">
+                <BeginStoryboard>
+                    <Storyboard>
+                        <DoubleAnimation Storyboard.TargetProperty="Opacity" From="0" To="1" Duration="0:0:0.28" />
+                        <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(TranslateTransform.Y)" From="8" To="0" Duration="0:0:0.28" />
+                    </Storyboard>
+                </BeginStoryboard>
+            </EventTrigger>
+        </Style.Triggers>
     </Style>
 </ResourceDictionary>

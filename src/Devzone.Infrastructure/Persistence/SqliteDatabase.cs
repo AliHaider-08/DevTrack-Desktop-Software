@@ -87,8 +87,9 @@ public static class SqliteDatabase
             "CREATE INDEX IF NOT EXISTS IX_StockMovements_CompanyId_OccurredAt ON StockMovements (CompanyId, OccurredAt);",
             cancellationToken);
         await dbContext.Database.ExecuteSqlRawAsync(
-            "CREATE TABLE IF NOT EXISTS Customers (Id TEXT NOT NULL PRIMARY KEY, CompanyId TEXT NOT NULL, Code TEXT NOT NULL, NormalizedCode TEXT NOT NULL, Name TEXT NOT NULL, NormalizedName TEXT NOT NULL, Phone TEXT NULL, Email TEXT NULL, Address TEXT NULL, CreditLimit TEXT NOT NULL, IsActive INTEGER NOT NULL, CreatedAt TEXT NOT NULL, FOREIGN KEY (CompanyId) REFERENCES Companies (Id) ON DELETE RESTRICT);",
+            "CREATE TABLE IF NOT EXISTS Customers (Id TEXT NOT NULL PRIMARY KEY, CompanyId TEXT NOT NULL, Code TEXT NOT NULL, NormalizedCode TEXT NOT NULL, Name TEXT NOT NULL, NormalizedName TEXT NOT NULL, BusinessName TEXT NULL, Phone TEXT NULL, Email TEXT NULL, Address TEXT NULL, CreditLimit TEXT NOT NULL, IsActive INTEGER NOT NULL, CreatedAt TEXT NOT NULL, FOREIGN KEY (CompanyId) REFERENCES Companies (Id) ON DELETE RESTRICT);",
             cancellationToken);
+        await EnsureCustomerBusinessNameColumnAsync(dbContext, cancellationToken);
         await dbContext.Database.ExecuteSqlRawAsync(
             "CREATE UNIQUE INDEX IF NOT EXISTS IX_Customers_CompanyId_NormalizedCode ON Customers (CompanyId, NormalizedCode);",
             cancellationToken);
@@ -155,6 +156,29 @@ public static class SqliteDatabase
                 await dbContext.Database.ExecuteSqlRawAsync("ALTER TABLE Products ADD COLUMN " + definition + ";", cancellationToken);
             }
         }
+    }
+
+    private static async Task EnsureCustomerBusinessNameColumnAsync(DevzoneDbContext dbContext, CancellationToken cancellationToken)
+    {
+        var connection = dbContext.Database.GetDbConnection();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA table_info('Customers');";
+        if (connection.State != System.Data.ConnectionState.Open)
+            await connection.OpenAsync(cancellationToken);
+        var hasBusinessName = false;
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        {
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                if (string.Equals(reader.GetString(1), "BusinessName", StringComparison.OrdinalIgnoreCase))
+                {
+                    hasBusinessName = true;
+                    break;
+                }
+            }
+        }
+        if (!hasBusinessName)
+            await dbContext.Database.ExecuteSqlRawAsync("ALTER TABLE Customers ADD COLUMN BusinessName TEXT NULL;", cancellationToken);
     }
 
     private static async Task EnsureBusinessTypeColumnAsync(DevzoneDbContext dbContext, CancellationToken cancellationToken)
